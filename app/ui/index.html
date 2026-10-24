@@ -1350,6 +1350,7 @@
 
   /* 用当前 tasks/undated 整体重画（刷新数据后调用） */
   function renderTimeline() {
+    closeDetail();          // 卡片会被重建，弹窗持有的旧对象要丢掉
     computeRange();
     canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
     rebuildDayMarks();
@@ -2071,6 +2072,7 @@
       updateCounts();
     },
     remove(id) {
+      if (detailTask && detailTask.id === id) closeDetail();
       document.querySelectorAll('.chip[data-id="' + id + '"]').forEach(el => el.remove());
       layoutLane("sched");
       layoutLane("due");
