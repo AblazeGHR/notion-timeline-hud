@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 import config as app_config  # noqa: E402
+import tray as app_tray  # noqa: E402
 from data import DATA_SOURCE_ID, TRACK_DUE, TRACK_SCHED, load, to_ui  # noqa: E402
 from quickadd import parse as parse_quick_add  # noqa: E402
 from notion_timeline.api_client import NotionClient  # noqa: E402
@@ -1411,6 +1412,53 @@ def main() -> None:
     api._window = window
     start_activation_server(window)
 
+    # ---- 系统托盘（pystray 缺失时自动跳过） ----
+
+    def tray_toggle(icon: Any) -> None:
+        toggle(window)
+        try:
+            icon.update_menu()          # 菜单文案跟着显示状态变
+        except Exception:  # noqa: BLE001
+            pass
+
+    def tray_refresh(icon: Any) -> None:
+        try:
+            window.evaluate_js("window.__hud && window.__hud.refresh()")
+            print("托盘：已请求刷新数据", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print("托盘刷新失败:", exc, flush=True)
+
+    def tray_autostart(icon: Any, enabled: bool) -> None:
+        try:
+            message = set_autostart(bool(enabled))
+            actual = get_autostart()
+            state["config"] = app_config.patch({"autostart": bool(actual)})
+            print(f"托盘：{message}（回读 {'on' if actual else 'off'}）", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print("托盘切换自启失败:", exc, flush=True)
+        try:
+            icon.update_menu()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def tray_quit(icon: Any) -> None:
+        print("托盘：退出", flush=True)
+        app_tray.stop(icon)
+        try:
+            window.destroy()
+        except Exception as exc:  # noqa: BLE001
+            print("托盘退出窗口失败:", exc, flush=True)
+
+    tray_icon = app_tray.create(
+        is_visible=lambda: bool(state["visible"]),
+        on_toggle=tray_toggle,
+        on_refresh=tray_refresh,
+        autostart_enabled=lambda: bool(get_autostart()),
+        on_autostart=tray_autostart,
+        on_quit=tray_quit,
+    )
+    app_tray.start(tray_icon)
+
     def on_loaded() -> None:
         time.sleep(0.15)
         try:
@@ -1456,7 +1504,10 @@ def main() -> None:
     else:
         print(f"{config['hotkey']} 唤出/收起，Ctrl+Alt+Q 退出", flush=True)
     print("pid:", os.getpid(), flush=True)
-    webview.start(gui="edgechromium", debug=False)
+    try:
+        webview.start(gui="edgechromium", debug=False)
+    finally:
+        app_tray.stop(tray_icon)
 
 
 if __name__ == "__main__":

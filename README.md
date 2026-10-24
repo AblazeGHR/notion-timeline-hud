@@ -26,7 +26,8 @@ E:/software/miniforge/python.exe app/main.py --no-blur
 E:/software/miniforge/python.exe app/main.py --autostart on|off
 ```
 
-依赖：Python 3.11+、`pywebview`（WebView2 运行时）、`httpx`、`python-dotenv`。
+依赖：Python 3.11+、`pywebview`（WebView2 运行时）、`httpx`、`python-dotenv`、
+`pystray` + `Pillow`（托盘图标；缺失时只记日志，主程序照常运行）。
 Notion token 放在环境变量 `NOTION_TOKEN` 或仓库根 `.env`（`.env` 已被 gitignore）。
 
 ## 热键
@@ -37,6 +38,21 @@ Notion token 放在环境变量 `NOTION_TOKEN` 或仓库根 `.env`（`.env` 已�
 | `Ctrl+Alt+Q` | 退出进程 |
 
 热键改了之后若被别的程序占用，`set_config` 会失败并把设置回滚。
+
+## 托盘
+
+窗口旁边还有一个小托盘图标（深色圆角底 + 一道竖向时间轴 + 当前时刻亮点，与面板同色系）：
+
+| 操作 | 作用 |
+|---|---|
+| 双击图标 | 显示 / 隐藏（等同热键） |
+| 菜单「显示 / 隐藏」 | 同上，文案跟着当前状态变 |
+| 菜单「刷新数据」 | 让前端重新拉一次 Notion 数据（等价点面板上的 ↻） |
+| 菜单「开机自启」 | 勾选状态取自注册表；点击即写入 / 删除 `HKCU\...\Run` |
+| 菜单「退出」 | 停掉托盘并退出进程 |
+
+托盘用 `pystray` + `Pillow` 实现（`app/tray.py`）。这两个包没装、或托盘创建失败时，
+启动日志会打一行说明，程序继续无托盘运行，热键和面板功能不受影响。
 
 ## 设置项
 
@@ -56,6 +72,7 @@ app/
   data.py           数据适配：API 优先、缓存回落、Task → UI 形状
   config.py         config.json 读写、校验、原子写入
   quickadd.py       「明天 15:00 写周报」这类自然语言解析
+  tray.py           系统托盘：图标、菜单、显示/隐藏、刷新、自启、退出
   ui/index.html     全部界面（HTML + CSS + JS，单文件）
 src/notion_timeline/
   api_client.py     Notion REST 客户端（data source 查询、页面/块读写）

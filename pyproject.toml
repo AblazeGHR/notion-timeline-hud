@@ -7,7 +7,7 @@ name = "notion-timeline"
 version = "0.1.0"
 description = "时间线任务面板后端：Notion 本地缓存只读 + REST API 写入"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.27"]
+dependencies = ["httpx>=0.27", "pystray>=0.19.5", "Pillow>=10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
