@@ -678,6 +678,10 @@ def show_window(window: webview.Window) -> None:
     if hwnd:
         user32.ShowWindow(hwnd, 5)  # SW_SHOW
         user32.SetForegroundWindow(hwnd)
+    try:   # 首次引导：唤出也算「已读」
+        window.evaluate_js("window.__hud && window.__hud.markIntroSeen()")
+    except Exception:  # noqa: BLE001
+        pass
     state["visible"] = True
     state["shown_at"] = time.time()
 

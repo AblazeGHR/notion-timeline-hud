@@ -538,6 +538,26 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* ---------------- 首次引导 ---------------- */
+  .intro {
+    display: none; align-items: center; gap: 8px;
+    position: absolute; left: 12px; right: 12px; bottom: 46px; z-index: 13;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(124,140,255,.12);
+    border: 1px solid rgba(124,140,255,.28);
+    font-size: 10px; color: #C3C8F0;
+  }
+  .intro.on { display: flex; }
+  .intro span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .intro button {
+    flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px;
+    background: transparent; color: var(--faint); cursor: pointer;
+    font-size: 13px; line-height: 1;
+  }
+  .intro button:hover { background: rgba(255,255,255,.12); color: var(--text); }
+  body.theme-light .intro { color: #3A3B44; background: rgba(124,140,255,.16); }
+
   /* ---------------- 待安排 ---------------- */
   .drawer {
     position: absolute; left: 0; right: 0; bottom: 0; z-index: 12;
@@ -1007,6 +1027,11 @@
       <span class="nowtime" id="nowtime">18:47</span>
     </div>
   </section>
+
+  <div class="intro" id="introBar">
+    <span id="introText">Ctrl+Alt+Space 唤出 · 点空白新建 · Esc 关闭</span>
+    <button id="introClose" title="知道了">×</button>
+  </div>
 
   <footer class="drawer" id="drawer">
     <div class="drawer-head" id="drawerHead">
@@ -2072,6 +2097,37 @@
     }, 300);
   });
 
+  /* ---------- 首次引导 ---------- */
+  const introBar = document.getElementById("introBar");
+  const introText = document.getElementById("introText");
+  let introSeen = true;      // 默认按已读，等 syncConfig 确认为 false 才显示
+
+  function showIntro(hotkey) {
+    introText.textContent =
+      (hotkey || "Ctrl+Alt+Space") + " 唤出 · 点空白新建 · Esc 关闭";
+    introBar.classList.add("on");
+  }
+
+  function hideIntro() {
+    introBar.classList.remove("on");
+  }
+
+  let introReported = false;
+  function markIntroSeen() {
+    if (introSeen) return;
+    introSeen = true;
+    hideIntro();
+    if (introReported) return;
+    introReported = true;
+    const api = bridge();
+    if (api) api.set_config({ seen_intro: true });
+  }
+
+  document.getElementById("introClose").addEventListener("click", e => {
+    e.stopPropagation();
+    markIntroSeen();
+  });
+
   /* ---------- 快捷键编辑 ---------- */
   const hotkeyRow = document.getElementById("hotkeyRow");
   const hotkeyCapture = document.getElementById("hotkeyCapture");
@@ -2277,6 +2333,13 @@
     swRelease.classList.toggle("on", Number(cfg.release_memory_minutes) > 0);
     renderHotkey(cfg.hotkey);
     hotkeyRow.dataset.saved = String(cfg.hotkey || "");
+    if (cfg.seen_intro === false) {
+      introSeen = false;
+      showIntro(cfg.hotkey);
+    } else {
+      introSeen = true;
+      hideIntro();
+    }
     if (cfg.timeline_scale != null) {
       DEFAULT_SCALE = clampScale(cfg.timeline_scale);
       applyScale(DEFAULT_SCALE);
@@ -2401,6 +2464,7 @@
           layoutLane(key);
           updateCounts();
           revealChip(item.el);
+          markIntroSeen();
         }
       } else {
         done = false;
@@ -3056,6 +3120,7 @@
 
   function openDetail(t, key, el) {
     if (!t) return;
+    markIntroSeen();
     detailTask = t;
     dTitle.value = t.title || "";
     dStatus.querySelectorAll("button").forEach(b =>
@@ -3294,6 +3359,7 @@
     /* 密度/字号调试自测入口 */
     setScale(value) { return applyScale(value); },
     getScale() { return PX_PER_HOUR; },
+    markIntroSeen() { markIntroSeen(); return true; },
     edgeSpeed(y) { return edgeSpeed(y); },
     setFontScale(value) { return applyFontScale(value); },
     getFontScale() { return FONT_SCALE; },
