@@ -162,16 +162,61 @@ _trim_lock = threading.Lock()
 _trim_timer: threading.Timer | None = None
 
 
+class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_ulong),
+        ("PageFaultCount", ctypes.c_ulong),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
+_get_process_memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+_get_process_memory_info.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(_PROCESS_MEMORY_COUNTERS),
+    ctypes.c_ulong,
+]
+_get_process_memory_info.restype = ctypes.c_bool
+ctypes.windll.kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+_set_working_set = ctypes.windll.kernel32.SetProcessWorkingSetSize
+_set_working_set.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+_set_working_set.restype = ctypes.c_bool
+_empty_working_set = ctypes.windll.psapi.EmptyWorkingSet
+_empty_working_set.argtypes = [ctypes.c_void_p]
+_empty_working_set.restype = ctypes.c_bool
+
+
+def working_set_mb() -> float:
+    """当前进程的工作集（MB），用于验证修剪效果。"""
+    try:
+        counters = _PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(counters)
+        handle = ctypes.windll.kernel32.GetCurrentProcess()
+        if not _get_process_memory_info(handle, ctypes.byref(counters), counters.cb):
+            return 0.0
+        return round(counters.WorkingSetSize / (1024 * 1024), 1)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def trim_memory() -> bool:
     """SetProcessWorkingSetSize(-1,-1) + EmptyWorkingSet，把工作集还给系统。"""
+    before = working_set_mb()
     try:
         handle = ctypes.windll.kernel32.GetCurrentProcess()
         unlimited = ctypes.c_size_t(0xFFFFFFFFFFFFFFFF)  # (SIZE_T)-1
-        ctypes.windll.kernel32.SetProcessWorkingSetSize(handle, unlimited, unlimited)
-        try:
-            ctypes.windll.psapi.EmptyWorkingSet(handle)
-        except Exception:  # noqa: BLE001 - 少数系统只有 kernel32 导出版
+        _set_working_set(handle, unlimited, unlimited)
+        if not _empty_working_set(handle):
             ctypes.windll.kernel32.K32EmptyWorkingSet(handle)
+        after = working_set_mb()
+        print(f"内存修剪: {before}MB -> {after}MB", flush=True)
         return True
     except Exception as exc:  # noqa: BLE001
         print("内存修剪失败:", exc, flush=True)
