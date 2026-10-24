@@ -517,7 +517,10 @@
     position: absolute; z-index: 40;
     right: 12px; top: 52px;
     width: 252px;
-    padding: 13px 13px 11px;
+    padding: 13px 13px 0;
+    max-height: calc(100% - 68px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     border-radius: 14px;
     background: rgba(26,27,33,.95);
     border: 1px solid rgba(255,255,255,.1);
@@ -527,6 +530,11 @@
     pointer-events: none;
     transition: opacity .16s ease, transform .16s ease;
   }
+  .settings::-webkit-scrollbar { width: 6px; }
+  .settings::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.18); border-radius: 3px;
+  }
+  .settings::-webkit-scrollbar-track { background: transparent; }
   .settings.open { opacity: 1; transform: none; pointer-events: auto; }
   .settings h4 {
     font-size: 10px; font-weight: 500; letter-spacing: .16em;
@@ -582,13 +590,24 @@
     cursor: pointer;
   }
   .seg button.on { background: rgba(255,255,255,.11); color: #E8E8EE; }
+  .quit-row {
+    position: sticky; bottom: 0; z-index: 2;
+    margin: 10px -13px 0;
+    padding: 9px 13px 11px;
+    background: rgba(26,27,33,.98);
+    border-top: 1px solid rgba(255,255,255,.09);
+    border-radius: 0 0 14px 14px;
+  }
   .quitbtn {
-    height: 23px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+    width: 100%; height: 28px; border-radius: 7px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
     border: 1px solid rgba(255,107,138,.32);
     background: rgba(255,107,138,.12); color: #FF9AAE;
-    font-family: inherit; font-size: 10.5px;
+    font-family: inherit; font-size: 11px;
   }
+  .quitbtn .pw { font-size: 12px; line-height: 1; }
   .quitbtn:hover { background: rgba(255,107,138,.24); }
+  body.theme-light .quit-row { background: rgba(252,252,254,.99); border-top-color: rgba(0,0,0,.09); }
   body.theme-light .quitbtn { color: #C4384F; }
   .sfoot { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.055);
            font-size: 9.5px; color: var(--faint); display: flex; justify-content: space-between; }
@@ -780,7 +799,7 @@
       <button class="iconbtn" id="btnRefresh" title="回到此刻">
         <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
       </button>
-      <button class="iconbtn" id="btnClose" title="隐藏">
+      <button class="iconbtn" id="btnClose" title="隐藏（Ctrl+Alt+Q 退出）">
         <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>
@@ -862,16 +881,14 @@
       <span class="switch on" id="swAutostart" data-toggle></span>
     </div>
     <div class="srow">
-      <span>退出应用</span>
-      <button class="quitbtn" id="btnQuit">退出</button>
-    </div>
-    <div class="srow">
       <span>隐藏 15 分钟后释放内存</span>
       <span class="switch on" id="swRelease" data-toggle></span>
     </div>
     <div class="sfoot">
       <span>Notion · 日程与任务数据库</span>
-
+    </div>
+    <div class="quit-row">
+      <button class="quitbtn" id="btnQuit"><span class="pw">⏻</span>退出 Timeline HUD</button>
     </div>
   </div>
 
