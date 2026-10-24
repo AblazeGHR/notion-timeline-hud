@@ -493,15 +493,18 @@ class Api:
 
     # ---- 写入（全部走 API，只动 DATA_SOURCE_ID 指向的库） ----
 
-    def create_from_text(self, text: str) -> dict:
+    def create_from_text(self, text: str, prop: str = TRACK_DUE) -> dict:
+        """快速新增。prop 决定日期落在哪条轨道（安排日期 / 截止日期）。"""
         title, day, clock = parse_quick_add(text)
         if not title:
             return {"ok": False, "error": "只有时间，没有标题"}
+        if prop not in (TRACK_SCHED, TRACK_DUE):
+            prop = TRACK_DUE
         try:
             with NotionClient() as client:
                 task = client.create_task(
                     title,
-                    dates={"截止日期": DateValue(day, start_time=clock, time_zone=TZ)},
+                    dates={prop: DateValue(day, start_time=clock, time_zone=TZ)},
                     data_source_id=DATA_SOURCE_ID,
                 )
             ui = to_ui([task])

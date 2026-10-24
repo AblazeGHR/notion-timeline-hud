@@ -1430,6 +1430,33 @@
 
   /* ---------- 快速新增 ---------- */
   const input = document.getElementById("quickInput");
+
+  /* 当前轨道对应的日期属性 */
+  function currentTrackProp() {
+    return timelineEl.dataset.track === "sched" ? "安排日期" : "截止日期";
+  }
+
+  /* 该时刻 → 快速新增的预填文案（15 分钟取整 + 相对日） */
+  function quickAddText(ts) {
+    const d = new Date(ts);
+    d.setMinutes(Math.round(d.getMinutes() / 15) * 15, 0, 0);
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diff = Math.round((dayStart - base) / DAY);
+    const word = diff === 0 ? "今天" : diff === 1 ? "明天" : diff === 2 ? "后天"
+      : diff === -1 ? "昨天"
+      : (d.getMonth() + 1) + "月" + d.getDate() + "日";
+    return word + " " + hhmm(d.getTime()) + " ";
+  }
+
+  /* 双击时间轴空白：把该位置的时间填进快速新增并聚焦 */
+  scroll.addEventListener("dblclick", e => {
+    if (e.target.closest(".chip, .dot, button, input")) return;   // 卡片/控件不接管
+    input.value = quickAddText(snapMs(tsAtPoint(e.clientY), false));
+    input.focus();
+    const len = input.value.length;
+    input.setSelectionRange(len, len);
+  });
+
   input.addEventListener("keydown", async e => {
     if (e.key !== "Enter" || !input.value.trim()) return;
     const text = input.value.trim();
@@ -1443,7 +1470,7 @@
 
     input.value = "";
     input.placeholder = "正在写入…";
-    const res = await window.pywebview.api.create_from_text(text);
+    const res = await window.pywebview.api.create_from_text(text, currentTrackProp());
     if (res && res.ok && res.task) {
       window.__hud.add(res.task);
       input.placeholder = "已加入：" + res.task.title;
