@@ -95,8 +95,13 @@ def _as_theme(value: Any) -> str:
 
 
 def _as_minutes(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    # pywebview 桥可能把 15 传成 15.0，整数值的浮点也收
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("release_memory_minutes 必须是整数分钟")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError("release_memory_minutes 必须是整数分钟")
+        value = int(value)
     if not 0 <= value <= 1440:
         raise ValueError("release_memory_minutes 必须在 0~1440 之间")
     return value

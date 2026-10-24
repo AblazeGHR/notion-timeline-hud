@@ -6,7 +6,9 @@
 <title>Timeline HUD · 外观稿 v2</title>
 <style>
   :root {
-    --panel-bg: rgba(16, 17, 22, 0.66);
+    /* 面板底色拆成 rgb + alpha，透明度滑杆只改 --panel-alpha，不动配色 */
+    --panel-rgb: 16, 17, 22;
+    --panel-alpha: 0.66;
     --panel-line: rgba(255, 255, 255, 0.09);
     --text: #ECECF1;
     --dim: #8E8F9C;
@@ -106,7 +108,7 @@
     display: flex;
     flex-direction: column;
     border-radius: var(--radius);
-    background: var(--panel-bg);
+    background: rgba(var(--panel-rgb), var(--panel-alpha));
     border: 1px solid var(--panel-line);
     backdrop-filter: blur(26px) saturate(165%) brightness(1.06);
     -webkit-backdrop-filter: blur(26px) saturate(165%) brightness(1.06);
@@ -290,6 +292,7 @@
     border: 1px solid rgba(255,255,255,.065);
     border-left: 2px solid var(--lane-color, var(--accent));
     cursor: default;
+    user-select: none;
     transition: transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s;
   }
   .chip:hover {
@@ -340,6 +343,29 @@
   }
   .chip .late { color: #FF8FA3; letter-spacing: .01em; }
   .tick { position: absolute; left: 0; width: 6px; height: 2px; border-radius: 2px; opacity: .7; }
+
+  /* ---------------- 拖拽改期 ---------------- */
+  body.drag-lock,
+  body.drag-lock * { user-select: none; }
+  body.drag-lock .scroll { overflow: hidden; }   /* 拖拽期间不许滚时间轴 */
+  .chip.dragging {
+    cursor: grabbing;
+    transition: none;
+    z-index: 30 !important;
+    background: rgba(124,140,255,.16);
+    border-color: rgba(124,140,255,.4);
+    box-shadow: 0 10px 24px -10px rgba(0,0,0,.9);
+  }
+  .dragtip {
+    position: fixed; z-index: 70; pointer-events: none;
+    padding: 2px 7px; border-radius: 6px;
+    background: rgba(20,21,26,.95);
+    border: 1px solid rgba(255,255,255,.14);
+    color: #E9E9F0; font-size: 10px; letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
+    opacity: 0; transition: opacity .1s;
+  }
+  .dragtip.on { opacity: 1; }
 
   /* ---------------- now 线 ---------------- */
   .nowline {
@@ -486,6 +512,37 @@
            font-size: 9.5px; color: var(--faint); display: flex; justify-content: space-between; }
   .sfoot .ok { color: #35CE94; }
 
+  /* ---------------- 浅色主题（只换配色，不动布局） ---------------- */
+  body.theme-light {
+    --panel-rgb: 246, 246, 250;
+    --panel-line: rgba(0, 0, 0, 0.09);
+    --text: #1B1C22;
+    --dim: #5A5C68;
+    --faint: #8A8C99;
+  }
+  body.theme-light .chip { background: rgba(0,0,0,.045); border-color: rgba(0,0,0,.08); }
+  body.theme-light .chip .t { color: #26272E; }
+  body.theme-light .chip .row2 { color: #7A7C8A; }
+  body.theme-light .chip .row2 .tag { color: #6C6E7C; background: rgba(0,0,0,.06); }
+  body.theme-light .daylabel { color: #8A8C99; }
+  body.theme-light .dayline { background: linear-gradient(90deg, rgba(0,0,0,.12), rgba(0,0,0,.03) 62%, transparent); }
+  body.theme-light .trackbar { background: linear-gradient(rgba(248,248,251,.95), rgba(248,248,251,.6) 74%, transparent); }
+  body.theme-light .track { color: #8A8C99; }
+  body.theme-light .quickadd { background: rgba(0,0,0,.05); border-color: rgba(0,0,0,.07); }
+  body.theme-light .quickadd input { color: #1B1C22; }
+  body.theme-light .drawer { background: rgba(250,250,253,.98); }
+  body.theme-light .drawer-head { color: #5A5C68; }
+  body.theme-light .ditem { color: #2B2C33; }
+  body.theme-light .settings { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.1); }
+  body.theme-light .settings h4 { color: #8A8C99; }
+  body.theme-light .srow { color: #3A3B44; }
+  body.theme-light .srow + .srow { border-top-color: rgba(0,0,0,.06); }
+  body.theme-light .sub { color: #5A5C68; }
+  body.theme-light .sub b { color: #2B2C33; }
+  body.theme-light .ctxmenu { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.1); }
+  body.theme-light .ctxmenu button { color: #2B2C33; }
+  body.theme-light .dragtip { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.12); color: #1B1C22; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
   }
@@ -604,23 +661,26 @@
     <h4>设置</h4>
     <div class="srow">
       <span>唤出快捷键</span>
-      <span class="keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd></span>
+      <span class="keys" id="hotkeyKeys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd></span>
     </div>
     <div class="srow">
       <span>面板透明度</span>
-      <input type="range" class="slider" min="40" max="95" value="66">
+      <input type="range" class="slider" id="opacitySlider" min="40" max="95" value="66">
     </div>
     <div class="srow">
       <span>主题</span>
-      <span class="seg"><button class="on">深色</button><button>浅色</button></span>
+      <span class="seg" id="themeSeg">
+        <button class="on" data-theme="dark">深色</button>
+        <button data-theme="light">浅色</button>
+      </span>
     </div>
     <div class="srow">
       <span>开机自启</span>
-      <span class="switch on" data-toggle></span>
+      <span class="switch on" id="swAutostart" data-toggle></span>
     </div>
     <div class="srow">
       <span>隐藏 15 分钟后释放内存</span>
-      <span class="switch on" data-toggle></span>
+      <span class="switch on" id="swRelease" data-toggle></span>
     </div>
     <div class="sfoot">
       <span>Notion · 日程与任务数据库</span>
@@ -636,6 +696,8 @@
   <button data-act="del" class="danger">删除</button>
 </div>
 
+<div class="dragtip" id="dragtip"></div>
+
 <script>window.__DATA__ = null;</script>
 <script>
 (() => {
@@ -650,6 +712,11 @@
   }
   fitToWindow();
   window.addEventListener("resize", fitToWindow);
+
+  /* pywebview 桥：注入时机不确定，每次用时现取 */
+  function bridge() {
+    return (window.pywebview && window.pywebview.api) || null;
+  }
 
   const NOW = new Date();
   const H = 3600000;
@@ -778,6 +845,99 @@
     );
   }
 
+  /* ---------- 拖拽改期（同轨上下拖，15 分钟吸附） ---------- */
+  const dragtip = document.getElementById("dragtip");
+  const TRACK_PROP = { sched: "安排日期", due: "截止日期" };
+  const ALL_DAY_KEY = { sched: "allDaySched", due: "allDayDue" };
+  const DRAG_SNAP_MIN = 15;   // 吸附粒度
+  const DRAG_CLICK_PX = 4;    // 位移小于这个像素数算点击，不写
+
+  /* 位移像素 → 分钟，按 15 分钟取整 */
+  function dragMinutes(dy) {
+    return Math.round((dy / PX_PER_MIN) / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
+  }
+
+  /* 时间气泡：目标时刻（跨天时把日期一起给出） */
+  function tipLabel(t, key, minutes) {
+    const ts = base + t[key] * H + minutes * 60000;
+    const d = new Date(ts);
+    const day = (d.getMonth() + 1) + "-" + d.getDate();
+    return t[ALL_DAY_KEY[key]] ? day + " 全天" : day + " " + hhmm(ts);
+  }
+
+  function startDrag(e, el, t, key) {
+    const item = items[key].find(it => it.el === el);
+    if (!item) return;
+    const startY = e.clientY;
+    const origTop = parseFloat(el.style.top) || item.y;
+    let dy = 0;
+    let dragging = false;
+
+    e.preventDefault();    // 禁掉原生文本选择 / 拖影
+    e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动
+    document.body.classList.add("drag-lock");   // 拖拽期间禁选中、禁滚动
+
+    const restore = () => {
+      el.style.top = origTop + "px";
+      layoutLane(key);
+    };
+
+    const onMove = ev => {
+      dy = ev.clientY - startY;
+      if (!dragging) {
+        if (Math.abs(dy) < DRAG_CLICK_PX) return;
+        dragging = true;
+        el.classList.add("dragging");
+      }
+      el.style.top = (origTop + dy) + "px";
+      dragtip.textContent = tipLabel(t, key, dragMinutes(dy));
+      dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 120) + "px";
+      dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
+      dragtip.classList.add("on");
+    };
+
+    const onUp = async () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("drag-lock");
+      dragtip.classList.remove("on");
+      el.classList.remove("dragging");
+      if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
+      el._dragEndedAt = Date.now();
+
+      const minutes = dragMinutes(dy);
+      const api = bridge();
+      if (!minutes || !api) {
+        restore();
+        return;
+      }
+      el.style.opacity = ".7";
+      const res = await api.reschedule(t.id, TRACK_PROP[key], minutes);
+      el.style.opacity = "";
+      if (res && res.ok && res.task) {
+        const hours = res.task[key];
+        if (typeof hours === "number") {
+          t[key] = hours;
+          t[ALL_DAY_KEY[key]] = !!res.task[ALL_DAY_KEY[key]];
+          item.y = yOf(base + hours * H);
+          const timeSpan = el.querySelector(".row2 span");
+          if (timeSpan) {
+            timeSpan.textContent = t[ALL_DAY_KEY[key]] ? "全天" : hhmm(base + hours * H);
+          }
+          const late = key === "due" && base + hours * H < nowTs && t.status !== "done";
+          el.classList.toggle("overdue", late);
+        }
+      } else {
+        restore();
+        alert("改期失败：" + ((res && res.error) || "未知错误"));
+      }
+      layoutLane(key);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   function mountChip(t, key) {
     if (typeof t[key] !== "number") return null;
     const ts = base + t[key] * H;
@@ -792,6 +952,7 @@
 
     el.addEventListener("click", e => {
       e.stopPropagation();
+      if (Date.now() - (el._dragEndedAt || 0) < 300) return;  // 拖拽刚结束，别当选中
       document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
       el.classList.add("sel");
     });
@@ -802,6 +963,11 @@
       e.preventDefault();
       e.stopPropagation();
       openCtx(e.clientX, e.clientY, t, el.dataset.status || "");
+    });
+    el.addEventListener("mousedown", e => {
+      if (e.button !== 0) return;                            // 只认左键
+      if (e.target.closest(".dot, button, input")) return;    // 状态点/按钮不参与拖拽
+      startDrag(e, el, t, key);
     });
 
     lanes[key].appendChild(el);
@@ -879,20 +1045,96 @@
   settings.addEventListener("click", e => e.stopPropagation());
   document.addEventListener("click", () => settings.classList.remove("open"));
 
-  document.querySelectorAll("[data-toggle]").forEach(sw =>
-    sw.addEventListener("click", () => sw.classList.toggle("on")));
-  document.querySelectorAll(".seg button").forEach(btn =>
-    btn.addEventListener("click", () => {
-      btn.parentElement.querySelectorAll("button").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-    }));
+  /* ---------- 设置项：落 config.json，失败回滚 UI ---------- */
+  const slider = document.getElementById("opacitySlider");
+  const themeSeg = document.getElementById("themeSeg");
+  const swAutostart = document.getElementById("swAutostart");
+  const swRelease = document.getElementById("swRelease");
+  const hotkeyKeys = document.getElementById("hotkeyKeys");
 
-  const slider = document.querySelector(".slider");
-  slider.addEventListener("input", () => {
-    const v = Number(slider.value);
+  function paintSlider(percent) {
     slider.style.background =
-      "linear-gradient(90deg, var(--accent) " + v + "%, rgba(255,255,255,.14) " + v + "%)";
+      "linear-gradient(90deg, var(--accent) " + percent + "%, rgba(255,255,255,.14) " + percent + "%)";
+  }
+  paintSlider(slider.value);
+
+  slider.addEventListener("input", () => paintSlider(slider.value));
+  slider.addEventListener("change", async () => {
+    const value = Number(slider.value);
+    const previous = Number(slider.dataset.saved || 66);
+    const api = bridge();
+    if (!api) return;
+    const res = await api.set_config({ opacity: value / 100 });
+    if (res && res.ok) {
+      slider.dataset.saved = String(value);
+    } else {
+      slider.value = String(previous);
+      paintSlider(previous);
+      alert("透明度没保存上：" + ((res && res.error) || "未知错误"));
+    }
   });
+
+  themeSeg.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const previous = themeSeg.querySelector("button.on");
+      themeSeg.querySelectorAll("button").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      const api = bridge();
+      if (!api) return;
+      const res = await api.set_config({ theme: btn.dataset.theme });
+      if (!res || !res.ok) {
+        if (previous) {
+          themeSeg.querySelectorAll("button").forEach(b => b.classList.remove("on"));
+          previous.classList.add("on");
+        }
+        alert("主题切换失败：" + ((res && res.error) || "未知错误"));
+      }
+    });
+  });
+
+  swAutostart.addEventListener("click", async () => {
+    const target = !swAutostart.classList.contains("on");
+    const api = bridge();
+    if (!api) {
+      swAutostart.classList.toggle("on", target);
+      return;
+    }
+    const res = await api.set_autostart(target);
+    if (res && res.ok) swAutostart.classList.toggle("on", target);
+    else alert("开机自启设置失败：" + ((res && res.error) || "未知错误"));
+  });
+
+  swRelease.addEventListener("click", async () => {
+    const target = !swRelease.classList.contains("on");
+    const api = bridge();
+    if (!api) {
+      swRelease.classList.toggle("on", target);
+      return;
+    }
+    const res = await api.set_config({ release_memory_minutes: target ? 15 : 0 });
+    if (res && res.ok) swRelease.classList.toggle("on", target);
+    else alert("设置失败：" + ((res && res.error) || "未知错误"));
+  });
+
+  async function syncConfig() {
+    const api = bridge();
+    if (!api) return;
+    const cfg = await api.get_config();
+    if (!cfg) return;
+    const percent = Math.round(Number(cfg.opacity) * 100);
+    slider.value = String(percent);
+    slider.dataset.saved = String(percent);
+    paintSlider(percent);
+    themeSeg.querySelectorAll("button").forEach(b =>
+      b.classList.toggle("on", b.dataset.theme === cfg.theme));
+    swAutostart.classList.toggle("on", !!cfg.autostart);
+    swRelease.classList.toggle("on", Number(cfg.release_memory_minutes) > 0);
+    hotkeyKeys.innerHTML = String(cfg.hotkey || "")
+      .split("+").filter(Boolean)
+      .map(k => "<kbd>" + k.trim() + "</kbd>").join("");
+  }
+  if (window.pywebview) syncConfig();
+  else window.addEventListener("pywebviewready", syncConfig);
 
   /* ---------- 轨道切换 ---------- */
   const timelineEl = document.getElementById("timeline");
