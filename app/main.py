@@ -1091,6 +1091,46 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
+    def create_at(
+        self, prop: str, title: str, start: dict | None, end: dict | None = None
+    ) -> dict:
+        """空白处新建（可带结束时间）：prop 决定落哪条轨道。"""
+        if prop not in (TRACK_SCHED, TRACK_DUE):
+            return {"ok": False, "error": f"不支持的日期属性：{prop}"}
+        name = str(title or "").strip()
+        if not name:
+            return {"ok": False, "error": "标题不能为空"}
+        try:
+            start_point = _parse_point(start, "开始时间")
+            end_point = _parse_point(end, "结束时间")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if start_point is None:
+            return {"ok": False, "error": "缺少开始时间"}
+
+        start_dt = datetime.fromisoformat(start_point[0] + "T" + (start_point[1] or "00:00"))
+        if end_point is not None:
+            end_dt = datetime.fromisoformat(end_point[0] + "T" + (end_point[1] or "00:00"))
+            if end_dt <= start_dt:
+                return {"ok": False, "error": "结束时间必须晚于开始时间"}
+
+        value = DateValue(
+            start=start_point[0],
+            end=end_point[0] if end_point else None,
+            start_time=start_point[1],
+            end_time=end_point[1] if end_point else None,
+            time_zone=TZ,
+        )
+        try:
+            with NotionClient() as client:
+                task = client.create_task(name, dates={prop: value}, data_source_id=DATA_SOURCE_ID)
+            ui = to_ui([task])
+            if not ui["tasks"]:
+                return {"ok": False, "error": "创建成功但没有日期，已进待安排"}
+            return {"ok": True, "task": ui["tasks"][0], "date": value.to_dict()}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
     def resize_task(
         self, task_id: str, prop: str, start: dict | None, end: dict | None
     ) -> dict:

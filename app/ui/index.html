@@ -220,6 +220,29 @@
     padding: 2px 5px; border-radius: 5px;
   }
 
+  /* ---------------- 空白新建 ---------------- */
+  .cband {
+    position: absolute; left: 7px; right: 6px; z-index: 11;
+    background: rgba(124,140,255,.22);
+    border: 1px solid rgba(124,140,255,.55);
+    border-radius: 7px; pointer-events: none;
+  }
+  .phcard {
+    position: absolute; left: 7px; right: 6px; z-index: 12;
+    min-height: 34px; padding: 4px 8px 5px;
+    display: flex; flex-direction: column; gap: 2px;
+    border: 1px dashed rgba(124,140,255,.8); border-radius: 8px;
+    background: rgba(124,140,255,.1);
+  }
+  .phcard .phtime { font-size: 9px; color: #AEB6FF; font-variant-numeric: tabular-nums; }
+  .phcard .phin {
+    width: 100%; border: 0; outline: 0; background: transparent;
+    color: var(--text); font-family: inherit; font-size: 12px;
+  }
+  .phcard .phin::placeholder { color: var(--faint); }
+  .phcard .phhint { font-size: 9px; color: var(--faint); }
+  body.theme-light .phcard { background: rgba(124,140,255,.12); }
+
   /* ---------------- 搜索 ---------------- */
   .search {
     display: none; flex: none; align-items: center; gap: 8px;
@@ -2149,6 +2172,180 @@
   }
   document.querySelectorAll(".track").forEach(b =>
     b.addEventListener("click", () => setTrack(b.dataset.track)));
+  /* ---------- 空白处新建 ---------- */
+  let suppressClick = false;
+  let phCard = null;
+
+  const GUTTER_PX = 56;
+
+  function inLaneX(clientX) {
+    return clientX - scroll.getBoundingClientRect().left >= GUTTER_PX;
+  }
+
+  /* clientY → 绝对分钟数（按 15 分钟吸附） */
+  function minuteAt(clientY) {
+    const rect = scroll.getBoundingClientRect();
+    const ts = canvasStart + ((scroll.scrollTop + (clientY - rect.top)) / PX_PER_MIN) * 60000;
+    return Math.round(ts / 60000 / 15) * 15;
+  }
+
+  function pointOfMinute(min) {
+    const d = new Date(min * 60000);
+    return {
+      date: d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()),
+      time: pad(d.getHours()) + ":" + pad(d.getMinutes())
+    };
+  }
+
+  function closePlaceholder() {
+    if (phCard) { phCard.remove(); phCard = null; }
+  }
+
+  function openPlaceholder(prop, key, startMin, endMin) {
+    closePlaceholder();
+    const el = document.createElement("div");
+    el.className = "phcard";
+    el.style.top = yOf(startMin * 60000) + "px";
+    if (endMin) el.style.height = Math.max(34, (endMin - startMin) * PX_PER_MIN) + "px";
+
+    const time = document.createElement("div");
+    time.className = "phtime";
+    time.textContent = endMin
+      ? hhmm(startMin * 60000) + "–" + hhmm(endMin * 60000)
+      : hhmm(startMin * 60000);
+
+    const input = document.createElement("input");
+    input.className = "phin";
+    input.placeholder = "新任务标题";
+    input.maxLength = 200;
+
+    const hint = document.createElement("div");
+    hint.className = "phhint";
+    hint.textContent = "回车保存 · Esc 取消";
+
+    el.append(time, input, hint);
+    lanes[key].appendChild(el);
+    phCard = el;
+    requestAnimationFrame(() => input.focus());
+
+    let done = false;
+    const cancel = () => {
+      if (done) return;
+      done = true;
+      closePlaceholder();
+    };
+    const commit = async () => {
+      if (done) return;
+      const title = input.value.trim();
+      if (!title) { cancel(); return; }
+      const api = bridge();
+      done = true;
+      if (!api) { closePlaceholder(); return; }
+      el.style.opacity = ".6";
+      const res = await api.create_at(
+        prop, title, pointOfMinute(startMin), endMin ? pointOfMinute(endMin) : null);
+      if (res && res.ok && res.task) {
+        closePlaceholder();
+        const item = mountChip(res.task, key);
+        if (item) {
+          items[key].push(item);
+          layoutLane(key);
+          updateCounts();
+        }
+      } else {
+        done = false;
+        el.style.opacity = "";
+        alert("创建失败：" + ((res && res.error) || "未知错误"));
+        input.focus();
+      }
+    };
+
+    input.addEventListener("keydown", ev => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") { ev.preventDefault(); commit(); }
+      else if (ev.key === "Escape") { ev.preventDefault(); cancel(); }
+    });
+    input.addEventListener("blur", () => { if (!input.value.trim()) cancel(); });
+    el.addEventListener("mousedown", ev => ev.stopPropagation());
+  }
+
+  /* 单击空白：有弹窗先关，否则建占位卡 */
+  scroll.addEventListener("click", e => {
+    if (suppressClick) { suppressClick = false; return; }
+    if (e.target.closest(".chip, .phcard, button, input")) return;
+    if (!inLaneX(e.clientX)) return;
+    if (detail.classList.contains("open")) { closeDetail(); return; }
+    if (settings.classList.contains("open")) { settings.classList.remove("open"); return; }
+    if (phCard) return;
+    const key = document.getElementById("timeline").dataset.track;
+    openPlaceholder(TRACK_PROP[key], key, minuteAt(e.clientY), null);
+  });
+
+  /* 拖拽空白：画时间带，松手后建带起止的占位卡 */
+  scroll.addEventListener("mousedown", e => {
+    if (e.button !== 0) return;
+    if (e.target.closest(".chip, .phcard, button, input")) return;
+    if (!inLaneX(e.clientX)) return;
+    startBand(e);
+  });
+
+  function startBand(e) {
+    const key = document.getElementById("timeline").dataset.track;
+    const startY = e.clientY;
+    const startMin = minuteAt(e.clientY);
+    let curMin = startMin;
+    let moved = false;
+    let band = null;
+    dragActive = true;                 // 禁整卡拖拽 + Ctrl+滚轮缩放
+
+    const onMove = ev => {
+      const dy = ev.clientY - startY;
+      if (!moved) {
+        if (Math.abs(dy) < 6) return;
+        moved = true;
+        band = document.createElement("div");
+        band.className = "cband";
+        lanes[key].appendChild(band);
+        document.body.classList.add("drag-lock");
+      }
+      curMin = minuteAt(ev.clientY);
+      if (curMin === startMin) curMin = startMin + (dy > 0 ? 15 : -15);   // 最小 15 分钟
+      const top = Math.min(startMin, curMin);
+      const bottom = Math.max(startMin, curMin);
+      band.style.top = yOf(top * 60000) + "px";
+      band.style.height = Math.max(4, (bottom - top) * PX_PER_MIN) + "px";
+    };
+
+    const detach = () => {
+      dragActive = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey, true);
+      document.body.classList.remove("drag-lock");
+      if (band) { band.remove(); band = null; }
+    };
+
+    const onKey = ev => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      detach();
+    };
+
+    const onUp = () => {
+      detach();
+      if (!moved) return;              // 当成单击，交给 click
+      suppressClick = true;
+      const top = Math.min(startMin, curMin);
+      const bottom = Math.max(startMin, curMin);
+      openPlaceholder(TRACK_PROP[key], key, top, bottom);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey, true);
+  }
+
   /* ---------- 搜索 ---------- */
   const searchBar = document.getElementById("searchBar");
   const searchInput = document.getElementById("searchInput");
