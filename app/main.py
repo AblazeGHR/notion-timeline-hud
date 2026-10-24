@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from ctypes import wintypes
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,9 @@ HWND_TOPMOST = -1
 SWP_SHOWWINDOW = 0x0040
 DWMWA_SYSTEMBACKDROP_TYPE = 38
 DWMSBT_TRANSIENTWINDOW = 3
+ERROR_ALREADY_EXISTS = 183
+MUTEX_NAMES = (r"Global\TimelineHUD_v1", r"Local\TimelineHUD_v1")
+PIPE_NAME = r"\\.\pipe\TimelineHUD_v1_activate"
 
 dwmapi = ctypes.windll.dwmapi
 
@@ -71,6 +75,7 @@ HOTKEY_ID_TOGGLE = 1
 HOTKEY_ID_QUIT = 2
 
 user32 = ctypes.windll.user32
+_mutex_handle: int | None = None
 user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowRect.restype = ctypes.c_bool
 _set_window_pos = user32.SetWindowPos
@@ -200,6 +205,83 @@ def apply_acrylic(hwnd: int) -> bool:
         return bool(user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
     except Exception:  # noqa: BLE001
         return False
+
+
+# ---------------------------------------------------------------- 单实例
+
+
+def acquire_single_instance() -> bool:
+    r"""拿命名互斥体。True=我是首个实例；False=已有实例在跑。
+
+    ``Global\`` 需要 SeCreateGlobalPrivilege，普通用户可能没有，拿不到就退到 ``Local\``。
+    """
+    global _mutex_handle
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    for name in MUTEX_NAMES:
+        handle = kernel32.CreateMutexW(None, True, name)
+        last_error = kernel32.GetLastError()   # ctypes.windll 不维护 last_error，得直接问
+        if not handle:
+            print(f"单实例：创建 {name} 失败（err={last_error}）", flush=True)
+            continue
+        if last_error == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+            print(f"单实例：{name} 已存在", flush=True)
+            return False
+        _mutex_handle = handle
+        print(f"单实例：持有 {name}", flush=True)
+        return True
+    print("单实例：互斥体创建失败，按首个实例继续", flush=True)
+    return True
+
+
+def notify_existing_instance(timeout: float = 3.0) -> bool:
+    """让已经在跑的那个实例把窗口唤出来（管道可能还没起，重试到超时）。"""
+    deadline = time.time() + timeout
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with Client(PIPE_NAME, family="AF_PIPE") as conn:
+                conn.send("show")
+                if not conn.poll(2.0):
+                    raise TimeoutError("等回执超时")
+            print("单实例：已通知现有实例唤出窗口", flush=True)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            time.sleep(0.2)
+    print(f"单实例：通知现有实例失败（{last_error}），仍然退出", flush=True)
+    return False
+
+
+def start_activation_server(window: webview.Window) -> None:
+    """后台监听激活请求（命名管道）。"""
+
+    def serve() -> None:
+        while True:
+            try:
+                with Listener(PIPE_NAME, family="AF_PIPE") as listener:
+                    while True:
+                        try:
+                            conn = listener.accept()
+                        except (EOFError, OSError):
+                            break
+                        try:
+                            if conn.poll(2.0):
+                                conn.recv()
+                            conn.send("ok")     # 先回执，别让对端等 show 卡住
+                            print("激活：收到唤出请求", flush=True)
+                            show_window(window)
+                        except Exception as exc:  # noqa: BLE001
+                            print("激活处理失败:", exc, flush=True)
+                        finally:
+                            conn.close()
+            except Exception as exc:  # noqa: BLE001 - 端口占用等情况，等一会重试
+                print("激活监听异常，1s 后重试:", exc, flush=True)
+                time.sleep(1.0)
+
+    threading.Thread(target=serve, daemon=True).start()
 
 
 # ---------------------------------------------------------------- 内存修剪
@@ -332,6 +414,17 @@ def reset_timeline_scale(window: webview.Window, *, offload: bool = False) -> No
         run()
 
 
+def show_window(window: webview.Window) -> None:
+    cancel_memory_trim()
+    window.show()
+    hwnd = state["hwnd"]
+    if hwnd:
+        user32.ShowWindow(hwnd, 5)  # SW_SHOW
+        user32.SetForegroundWindow(hwnd)
+    state["visible"] = True
+    state["shown_at"] = time.time()
+
+
 def toggle(window: webview.Window) -> None:
     try:
         if state["visible"]:
@@ -340,14 +433,7 @@ def toggle(window: webview.Window) -> None:
             state["visible"] = False
             schedule_memory_trim()
         else:
-            cancel_memory_trim()
-            window.show()
-            hwnd = state["hwnd"]
-            if hwnd:
-                user32.ShowWindow(hwnd, 5)  # SW_SHOW
-                user32.SetForegroundWindow(hwnd)
-            state["visible"] = True
-            state["shown_at"] = time.time()
+            show_window(window)
     except Exception as exc:  # noqa: BLE001
         print("toggle failed:", exc, flush=True)
 
@@ -804,6 +890,11 @@ def main() -> None:
         print(set_autostart(args.autostart == "on"))
         return
 
+    if not acquire_single_instance():
+        notify_existing_instance()
+        print(f"已有实例在运行，本进程退出（pid={os.getpid()}）", flush=True)
+        return
+
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:  # noqa: BLE001
@@ -839,6 +930,7 @@ def main() -> None:
         easy_drag=False,
     )
     api._window = window
+    start_activation_server(window)
 
     def on_loaded() -> None:
         time.sleep(0.15)
