@@ -425,6 +425,16 @@
   }
   .dragtip.on { opacity: 1; }
 
+  /* ---------------- 空状态 ---------------- */
+  .empty-hint {
+    position: absolute; left: var(--gutter); right: 8px; top: 50%;
+    transform: translateY(calc(-50% - 16px));
+    text-align: center; font-size: 11px; letter-spacing: .04em;
+    color: var(--faint); pointer-events: none; z-index: 0;   /* 低于 now 线，不挡它 */
+    opacity: 0; transition: opacity .18s;
+  }
+  .empty-hint.on { opacity: .9; }
+
   /* ---------------- now 线 ---------------- */
   .nowline {
     position: absolute; left: var(--gutter); right: 0; top: 50%;
@@ -789,6 +799,7 @@
       <div class="canvas" id="canvas"></div>
     </div>
 
+    <div class="empty-hint" id="emptyHint">双击空白新建</div>
     <div class="nowline" id="nowline"></div>
     <div class="nowbadge">
       <span class="glow"></span>
@@ -1287,6 +1298,14 @@
     return { el, y: yOf(ts), h: el.offsetHeight, t, key };
   }
 
+  function updateEmptyHint() {
+    const hint = document.getElementById("emptyHint");
+    if (!hint) return;
+    const track = document.getElementById("timeline").dataset.track;
+    const shown = items[track].filter(it => it.el.isConnected && !it.el.classList.contains("hide"));
+    hint.classList.toggle("on", shown.length === 0);
+  }
+
   function layoutLane(key) {
     lanes[key].querySelectorAll(".tick").forEach(node => node.remove());
     // items 保留全部（搜索过滤后还要能恢复），只有可见的参与堆叠
@@ -1311,6 +1330,7 @@
         lanes[key].appendChild(tick);
       }
     });
+    updateEmptyHint();
   }
 
   tasks.forEach(t => {
@@ -1689,6 +1709,7 @@
     timelineEl.dataset.track = name;
     document.querySelectorAll(".track").forEach(b =>
       b.classList.toggle("on", b.dataset.track === name));
+    updateEmptyHint();
   }
   document.querySelectorAll(".track").forEach(b =>
     b.addEventListener("click", () => setTrack(b.dataset.track)));
