@@ -1066,13 +1066,6 @@
       </span>
     </div>
     <div class="srow">
-      <span>主题</span>
-      <span class="seg" id="themeSeg">
-        <button class="on" data-theme="dark">深色</button>
-        <button data-theme="light">浅色</button>
-      </span>
-    </div>
-    <div class="srow">
       <span>在 Notion 应用中打开</span>
       <span class="switch on" id="swOpenInApp" data-toggle></span>
     </div>
@@ -2029,7 +2022,6 @@
 
   /* ---------- 设置项：落 config.json，失败回滚 UI ---------- */
   const slider = document.getElementById("opacitySlider");
-  const themeSeg = document.getElementById("themeSeg");
   const swAutostart = document.getElementById("swAutostart");
   const swOpenInApp = document.getElementById("swOpenInApp");
   const swHideBlur = document.getElementById("swHideBlur");
@@ -2214,24 +2206,6 @@
     startCapture();
   });
 
-  themeSeg.querySelectorAll("button").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const previous = themeSeg.querySelector("button.on");
-      themeSeg.querySelectorAll("button").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-      const api = bridge();
-      if (!api) return;
-      const res = await api.set_config({ theme: btn.dataset.theme });
-      if (!res || !res.ok) {
-        if (previous) {
-          themeSeg.querySelectorAll("button").forEach(b => b.classList.remove("on"));
-          previous.classList.add("on");
-        }
-        alert("主题切换失败：" + ((res && res.error) || "未知错误"));
-      }
-    });
-  });
-
   swOpenInApp.addEventListener("click", async e => {
     e.stopPropagation();
     const target = !swOpenInApp.classList.contains("on");
@@ -2320,8 +2294,6 @@
     slider.value = String(percent);
     slider.dataset.saved = String(percent);
     applyOpacity(percent);
-    themeSeg.querySelectorAll("button").forEach(b =>
-      b.classList.toggle("on", b.dataset.theme === cfg.theme));
     let autostartOn = !!cfg.autostart;
     if (api.get_autostart) {
       const actual = await api.get_autostart();      // 以注册表实际状态为准
