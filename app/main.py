@@ -621,13 +621,15 @@ class Api:
         return {"ok": True, "enabled": get_autostart()}
 
     def set_autostart(self, enabled: bool) -> dict:
+        """写 HKCU Run（pythonw 启动，无控制台）；返回值以注册表回读为准。"""
         try:
             message = set_autostart(bool(enabled))
-            updated = app_config.patch({"autostart": bool(enabled)})
+            actual = get_autostart()          # 回读，避免"以为写成功"
+            updated = app_config.patch({"autostart": bool(actual)})
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
         state["config"] = updated
-        return {"ok": True, "message": message, "config": updated}
+        return {"ok": True, "message": message, "enabled": actual, "config": updated}
 
     def reload_data(self) -> dict:
         data, source, error = load()

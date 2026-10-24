@@ -1594,8 +1594,13 @@
       return;
     }
     const res = await api.set_autostart(target);
-    if (res && res.ok) swAutostart.classList.toggle("on", target);
-    else alert("开机自启设置失败：" + ((res && res.error) || "未知错误"));
+    if (res && res.ok) {
+      // 以注册表回读为准，别只看刚才点的方向
+      const on = (res.enabled === null || res.enabled === undefined) ? target : !!res.enabled;
+      swAutostart.classList.toggle("on", on);
+    } else {
+      alert("开机自启设置失败：" + ((res && res.error) || "未知错误"));
+    }
   });
 
   document.getElementById("btnQuit").addEventListener("click", e => {
