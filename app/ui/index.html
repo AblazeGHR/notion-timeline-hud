@@ -1647,6 +1647,16 @@
     el.addEventListener("dblclick", () => {
       if (window.pywebview && window.pywebview.api) window.pywebview.api.open_task(t.id);
     });
+    /* hover 200ms 预取正文：点击打开时直接命中缓存 */
+    let prefetchTimer = null;
+    el.addEventListener("mouseenter", () => {
+      clearTimeout(prefetchTimer);
+      prefetchTimer = setTimeout(() => {
+        const api = bridge();
+        if (api && api.prefetch_content) api.prefetch_content(t.id);
+      }, 200);
+    });
+    el.addEventListener("mouseleave", () => clearTimeout(prefetchTimer));
     el.addEventListener("contextmenu", e => {
       e.preventDefault();
       e.stopPropagation();
@@ -1848,28 +1858,34 @@
   setInterval(updateNowMarker, 30_000);
   requestAnimationFrame(() => scrollToNow(false));
   window.addEventListener("resize", () => scrollToNow(false));
+  /* 刷新数据（按钮 / 托盘共用）：保持当前视口中线时刻 */
+  async function refreshData() {
+    const api = bridge();
+    if (!api || !api.reload_data) { scrollToNow(true); return null; }
+    const centerTs = tsAtPoint(scroll.getBoundingClientRect().top + scroll.clientHeight / 2);
+    const res = await api.reload_data();
+    if (res && res.data) {
+      tasks.length = 0;
+      tasks.push(...(res.data.tasks || []));
+      undated.length = 0;
+      undated.push(...(res.data.undated || []));
+      if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
+      renderTimeline();
+      scroll.scrollTop = Math.max(
+        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
+      if (res.error) console.warn("刷新回落：", res.error);
+    }
+    return res;
+  }
+  window.__hudRefreshData = refreshData;      // 托盘调 __hud.refresh() 时用
+
   document.getElementById("btnRefresh").addEventListener("click", async () => {
     const btn = document.getElementById("btnRefresh");
-    const api = bridge();
-    if (!api || !api.reload_data) { scrollToNow(true); return; }
     btn.classList.add("spinning");
     try {
-      // 刷新保持当前视口中线时刻；只有首次加载才居中到「此刻」
-      const centerTs = tsAtPoint(scroll.getBoundingClientRect().top + scroll.clientHeight / 2);
-      const res = await api.reload_data();
-      if (res && res.data) {
-        tasks.length = 0;
-        tasks.push(...(res.data.tasks || []));
-        undated.length = 0;
-        undated.push(...(res.data.undated || []));
-        if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
-        renderTimeline();
-        scroll.scrollTop = Math.max(
-          0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
-        if (res.error) console.warn("刷新回落：", res.error);
-      } else {
-        alert("刷新失败：" + ((res && res.error) || "未知错误"));
-      }
+      const res = await refreshData();
+      if (!res) return;
+      if (!res.data) alert("刷新失败：" + ((res && res.error) || "未知错误"));
     } finally {
       btn.classList.remove("spinning");
     }
@@ -3265,6 +3281,13 @@
       setTrack(track);
       scroll.scrollTop = Math.max(
         0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
+      return true;
+    },
+
+    /* 托盘「刷新数据」：不等结果，托盘菜单不该被网络拖住 */
+    refresh() {
+      if (typeof window.__hudRefreshData !== "function") return false;
+      window.__hudRefreshData().catch(err => console.warn("刷新失败：", err));
       return true;
     },
 

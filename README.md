@@ -68,7 +68,8 @@ seen_intro / autostart`。
 
 ```
 app/
-  main.py           桌面壳：窗口、热键、单实例、亚克力/透明、开机自启、后台刷新、JS 桥
+  main.py           桌面壳：窗口、热键、单实例、亚克力/透明、开机自启、后台刷新、
+                    正文并发读取与 hover 预取、JS 桥
   data.py           数据适配：API 优先、缓存回落、Task → UI 形状
   config.py         config.json 读写、校验、原子写入
   quickadd.py       「明天 15:00 写周报」这类自然语言解析
@@ -95,7 +96,8 @@ E:/software/miniforge/python.exe tests/test_dates.py
 
 # 浏览器内自测入口（无窗口打开 app/ui/index.html 时可用）
 window.__hud.getScale() / setScale(v) / getFontScale() / setFontScale(v) /
-resetScale() / setData(data) / setStatus({source}) / markIntroSeen() / edgeSpeed(y)
+resetScale() / setData(data) / setStatus({source}) / markIntroSeen() / edgeSpeed(y) /
+refresh()
 ```
 
 人工验收清单见 [docs/TEST-UI.md](docs/TEST-UI.md)。

@@ -24,6 +24,7 @@ import time
 import webbrowser
 from datetime import datetime
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import wintypes
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
@@ -330,6 +331,20 @@ _BLOCK_TYPES = {
 }
 _PAGE_CACHE_TTL = 60.0
 _page_content_cache: dict[str, tuple[float, dict]] = {}
+_prefetch_recent: dict[str, float] = {}                 # id -> 上次预取时间（60s 内不重复）
+_prefetch_lock = threading.Lock()
+_prefetch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="prefetch")
+# 正文读取复用同一个 client：省掉每次的 DNS/TLS 握手（实测单次省 300ms 上下）
+_read_client: NotionClient | None = None
+_read_client_lock = threading.Lock()
+
+
+def _content_client() -> NotionClient:
+    global _read_client
+    with _read_client_lock:
+        if _read_client is None:
+            _read_client = NotionClient()
+        return _read_client
 
 
 def _plain_text(rich: Any) -> str:
@@ -360,52 +375,124 @@ def _map_block(raw: dict, level: int) -> dict | None:
     }
 
 
-def _collect_children(client, block_id: str, level: int, out: list, counter: dict, depth: int) -> None:
-    """递归取子块：最多 2 层、子块总数 ≤ 120。"""
-    if depth > 2 or counter["children"] >= 120:
-        return
+_CHILD_WORKERS = 4      # 子块并发度（Notion 单 key 限速约 3 req/s，4 路够用且不撞墙）
+_CHILD_LIMIT = 120      # 子块总数上限
+_CHILD_DEPTH = 2        # 子块最多再往下两层（level 2、3）
+
+
+def _all_children(client, block_id: str) -> list[dict]:
+    """取某个块的全部子块（自动翻页）。"""
+    out: list[dict] = []
     cursor = None
     while True:
         data = client.get_block_children(block_id, 100, cursor)
-        for raw in data.get("results") or []:
-            if counter["children"] >= 120:
-                counter["truncated"] = True
-                return
-            counter["children"] += 1
-            mapped = _map_block(raw, level)
-            if mapped:
-                out.append(mapped)
-            if raw.get("has_children"):
-                _collect_children(client, raw["id"], level + 1, out, counter, depth + 1)
+        out.extend(data.get("results") or [])
         if not data.get("has_more"):
-            return
+            return out
         cursor = data.get("next_cursor")
         if not cursor:
-            return
+            return out
 
 
 def fetch_page_blocks(client, page_id: str, max_top: int = 300) -> tuple[list, bool]:
-    """顶层最多 300 块，子块最多 120 块（2 层）。"""
-    blocks: list = []
-    counter = {"children": 0, "truncated": False}
+    """顶层最多 300 块，子块最多 120 块（2 层）。
+
+    子块按层并发拉（同层兄弟并行，最多 4 路），拼装仍按深度优先，
+    所以界面顺序和串行版一致。
+    """
+    top: list[dict] = []
+    truncated = False
     cursor = None
     while True:
         data = client.get_block_children(page_id, 100, cursor)
         for raw in data.get("results") or []:
-            if len(blocks) >= max_top:
-                counter["truncated"] = True
+            if len(top) >= max_top:
+                truncated = True
                 break
-            mapped = _map_block(raw, 1)
-            if mapped:
-                blocks.append(mapped)
-            if raw.get("has_children"):
-                _collect_children(client, raw["id"], 2, blocks, counter, 1)
-        if counter["truncated"] or not data.get("has_more"):
+            top.append(raw)
+        if truncated or not data.get("has_more"):
             break
         cursor = data.get("next_cursor")
         if not cursor:
             break
-    return blocks, counter["truncated"]
+
+    # 第一遍：并发把子块拉进 children[父 id]，不在这里拼顺序
+    children: dict[str, list[dict]] = {}
+    fetched = 0
+    frontier: list[tuple[dict, int]] = [(raw, 1) for raw in top]
+    with ThreadPoolExecutor(max_workers=_CHILD_WORKERS) as pool:
+        while frontier and fetched < _CHILD_LIMIT:
+            wave = [(raw, level) for raw, level in frontier
+                    if raw.get("has_children") and level <= _CHILD_DEPTH]
+            if not wave:
+                break
+            level_of = {raw["id"]: level for raw, level in wave}
+            futures = {pool.submit(_all_children, client, raw["id"]): raw["id"]
+                       for raw, _level in wave}
+            frontier = []
+            for future in as_completed(futures):
+                kids = future.result()
+                children[futures[future]] = kids
+                fetched += len(kids)
+                frontier.extend((kid, level_of[futures[future]] + 1) for kid in kids)
+            if fetched > _CHILD_LIMIT:
+                truncated = True
+
+    # 第二遍：按深度优先拼，子块总数封顶
+    blocks: list[dict] = []
+    counter = {"children": 0, "truncated": False}
+
+    def emit(raw: dict, level: int) -> None:
+        mapped = _map_block(raw, level)
+        if mapped:
+            blocks.append(mapped)
+        if level > _CHILD_DEPTH:
+            return
+        for kid in children.get(raw.get("id"), []):
+            if counter["children"] >= _CHILD_LIMIT:
+                counter["truncated"] = True
+                return
+            counter["children"] += 1
+            emit(kid, level + 1)
+
+    for raw in top:
+        if len(blocks) >= max_top:
+            truncated = True
+            break
+        emit(raw, 1)
+    return blocks, truncated or counter["truncated"]
+
+
+def _content_payload(page_id: str, refresh: bool = False) -> dict:
+    """读一页的块（带 60s 缓存）。详情弹窗和 hover 预取共用这一个入口。"""
+    key = str(page_id)
+    if refresh:
+        _page_content_cache.pop(key, None)
+    cached = _page_content_cache.get(key)
+    if cached and time.time() - cached[0] < _PAGE_CACHE_TTL:
+        payload = dict(cached[1])
+        payload["cached"] = True
+        return payload
+    try:
+        blocks, truncated = fetch_page_blocks(_content_client(), key)
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        if "HTTP 404" in message:
+            message = "页面不存在或已被删除"
+        elif "HTTP 403" in message:
+            message = "没有权限访问这一页"
+        return {"ok": False, "blocks": [], "truncated": False, "error": message}
+    payload = {"ok": True, "blocks": blocks, "truncated": truncated, "error": None}
+    _page_content_cache[key] = (time.time(), payload)
+    return dict(payload)
+
+
+def _prefetch_job(page_id: str) -> None:
+    started = time.perf_counter()
+    payload = _content_payload(page_id)
+    cost = (time.perf_counter() - started) * 1000
+    state_text = "ok" if payload.get("ok") else "fail"
+    print(f"预取内容 {page_id[:8]}… {state_text} {cost:.0f}ms", flush=True)
 
 
 # ---------------------------------------------------------------- 单实例
@@ -1212,27 +1299,29 @@ class Api:
 
     def get_page_content(self, page_id: str, refresh: bool = False) -> dict:
         """详情弹窗「内容」页：只读拉取该页的块（60s 内复用；refresh=True 强制重拉）。"""
-        key = str(page_id)
-        if refresh:
-            _page_content_cache.pop(key, None)
-        cached = _page_content_cache.get(key)
-        if cached and time.time() - cached[0] < _PAGE_CACHE_TTL:
-            payload = dict(cached[1])
-            payload["cached"] = True
-            return payload
-        try:
-            with NotionClient() as client:
-                blocks, truncated = fetch_page_blocks(client, key)
-        except Exception as exc:  # noqa: BLE001
-            message = str(exc)
-            if "HTTP 404" in message:
-                message = "页面不存在或已被删除"
-            elif "HTTP 403" in message:
-                message = "没有权限访问这一页"
-            return {"ok": False, "blocks": [], "truncated": False, "error": message}
-        payload = {"ok": True, "blocks": blocks, "truncated": truncated, "error": None}
-        _page_content_cache[key] = (time.time(), payload)
-        return dict(payload)
+        return _content_payload(str(page_id), refresh)
+
+    def prefetch_content(self, page_id: str) -> dict:
+        """hover 预取：后台把内容塞进缓存，前端不渲染。立即返回，不阻塞 JS。"""
+        key = str(page_id or "").strip()
+        if not key:
+            return {"ok": False, "error": "缺少页面 id"}
+        if not state["visible"]:
+            return {"ok": True, "skipped": "hidden"}
+        now = time.time()
+        with _prefetch_lock:
+            cached = _page_content_cache.get(key)
+            if cached and now - cached[0] < _PAGE_CACHE_TTL:
+                return {"ok": True, "cached": True}
+            last = _prefetch_recent.get(key)
+            if last and now - last < _PAGE_CACHE_TTL:
+                return {"ok": True, "skipped": "recent"}
+            # 顺手清掉过期记录，字典不会无限长
+            for old in [k for k, ts in _prefetch_recent.items() if now - ts >= _PAGE_CACHE_TTL]:
+                _prefetch_recent.pop(old, None)
+            _prefetch_recent[key] = now
+        _prefetch_pool.submit(_prefetch_job, key)
+        return {"ok": True, "started": True}
 
     def update_task_fields(self, task_id: str, patch: dict | None = None) -> dict:
         """详情弹窗的自动保存：只提交 patch 里出现的字段。"""

@@ -19,6 +19,15 @@ from .models import DateValue, PropertyValue, StatusValue, Task
 NOTION_API_BASE = "https://api.notion.com"
 NOTION_VERSION = "2025-09-03"
 
+# HTTP/2 多路复用：并发读子块时共用一条连接，省掉每路 TLS 握手
+# （实测三并发 391ms → 304ms）。h2 没装就退回 HTTP/1.1。
+try:
+    import h2  # noqa: F401
+except ImportError:
+    _HTTP2 = False
+else:
+    _HTTP2 = True
+
 STATUS_PROPERTY_NAME = "状态"
 DEFAULT_TITLE_PROPERTY = "名称"
 
@@ -305,6 +314,7 @@ class NotionClient:
         self._client = httpx.Client(
             base_url=NOTION_API_BASE,
             timeout=timeout,
+            http2=_HTTP2,
             headers={
                 "Authorization": f"Bearer {self._token}",
                 "Notion-Version": NOTION_VERSION,
