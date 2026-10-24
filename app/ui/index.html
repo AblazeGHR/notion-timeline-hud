@@ -1597,7 +1597,12 @@
     paintSlider(percent);
     themeSeg.querySelectorAll("button").forEach(b =>
       b.classList.toggle("on", b.dataset.theme === cfg.theme));
-    swAutostart.classList.toggle("on", !!cfg.autostart);
+    let autostartOn = !!cfg.autostart;
+    if (api.get_autostart) {
+      const actual = await api.get_autostart();      // 以注册表实际状态为准
+      if (actual && actual.ok && actual.enabled !== null) autostartOn = !!actual.enabled;
+    }
+    swAutostart.classList.toggle("on", autostartOn);
     swRelease.classList.toggle("on", Number(cfg.release_memory_minutes) > 0);
     hotkeyKeys.innerHTML = String(cfg.hotkey || "")
       .split("+").filter(Boolean)

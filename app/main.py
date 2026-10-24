@@ -364,6 +364,21 @@ def blur_watch(window: webview.Window) -> None:
 # ---------------------------------------------------------------- 开机自启
 
 
+def get_autostart() -> bool | None:
+    """读 HKCU Run 里有没有我们的自启项；读不到返回 None。"""
+    import winreg
+
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, APP_NAME)
+            return bool(str(value).strip())
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
 def set_autostart(enable: bool) -> str:
     import winreg
 
@@ -554,6 +569,10 @@ class Api:
 
     def release_memory(self) -> dict:
         return {"ok": trim_memory()}
+
+    def get_autostart(self) -> dict:
+        """让开关反映注册表真实状态（可能被别处改过）。"""
+        return {"ok": True, "enabled": get_autostart()}
 
     def set_autostart(self, enabled: bool) -> dict:
         try:
