@@ -47,12 +47,13 @@ def _hours(date: str, clock: str | None, today0: datetime) -> float:
     return round((moment - today0).total_seconds() / 3600, 3)
 
 
+def _prop_text(task: Task, name: str) -> str:
+    value = task.properties.get(name)
+    return value.value if value and isinstance(value.value, str) else ""
+
+
 def _tag(task: Task) -> str:
-    for name in ("大方向", "学科"):
-        value = task.properties.get(name)
-        if value and isinstance(value.value, str) and value.value:
-            return value.value
-    return ""
+    return _prop_text(task, "大方向") or _prop_text(task, "学科")
 
 
 def to_ui(tasks: list[Task]) -> dict[str, Any]:
@@ -68,6 +69,8 @@ def to_ui(tasks: list[Task]) -> dict[str, Any]:
             "title": task.title,
             "status": status,
             "tag": tag,
+            "dir": _prop_text(task, "大方向"),
+            "subject": _prop_text(task, "学科"),
         }
         sched = task.dates.get(TRACK_SCHED)
         due = task.dates.get(TRACK_DUE)
@@ -83,7 +86,12 @@ def to_ui(tasks: list[Task]) -> dict[str, Any]:
         else:
             rows.append(item)
 
-    return {"tasks": rows, "undated": undated}
+    # 详情弹窗的下拉选项：从现有任务去重（Notion 侧的真实选项可能更多，先够用）
+    options = {
+        "大方向": sorted({t["dir"] for t in rows if t.get("dir")}),
+        "学科": sorted({t["subject"] for t in rows if t.get("subject")}),
+    }
+    return {"tasks": rows, "undated": undated, "options": options}
 
 
 def load() -> tuple[dict[str, Any], str, str | None]:

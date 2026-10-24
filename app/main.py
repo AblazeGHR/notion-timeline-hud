@@ -338,6 +338,43 @@ def set_autostart(enable: bool) -> str:
             return "本来就没有自启项"
 
 
+# ---------------------------------------------------------------- 状态选项
+
+_status_option_cache: dict[str, list[str]] = {}
+_STATUS_ALIASES = {
+    "未开始": ("未开始", "待办", "Todo", "Not started"),
+    "进行中": ("进行中", "In progress", "进行"),
+    "已完成": ("已完成", "完成", "Done"),
+}
+
+
+def _status_options(client: NotionClient) -> list[str]:
+    """读该库真实的状态选项（同一次运行只查一次）。"""
+    cached = _status_option_cache.get(DATA_SOURCE_ID)
+    if cached is not None:
+        return cached
+    options: list[str] = []
+    try:
+        data = client.get_data_source(DATA_SOURCE_ID)
+        status = (data.get("properties") or {}).get("状态") or {}
+        options = [str(o["name"]) for o in (status.get("status") or {}).get("options") or []]
+    except Exception as exc:  # noqa: BLE001 - 查不到就按原值写，让 API 报错
+        print("读取状态选项失败：", exc, flush=True)
+    _status_option_cache[DATA_SOURCE_ID] = options
+    return options
+
+
+def _resolve_status(client: NotionClient, name: str) -> str:
+    """界面写「已完成」、正式库叫「完成」时按库里的真实选项落。"""
+    options = _status_options(client)
+    if not options or name in options:
+        return name
+    for candidate in _STATUS_ALIASES.get(name, ()):
+        if candidate in options:
+            return candidate
+    return name
+
+
 # ---------------------------------------------------------------- 读当前日期
 
 
@@ -520,8 +557,64 @@ class Api:
         name = {"todo": "未开始", "doing": "进行中", "done": "已完成"}[nxt]
         try:
             with NotionClient() as client:
-                client.update_task(task_id, properties={"状态": PropertyValue("status", name)})
+                real = _resolve_status(client, name)
+                client.update_task(task_id, properties={"状态": PropertyValue("status", real)})
             return {"ok": True, "status": nxt}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def update_task_fields(self, task_id: str, patch: dict | None = None) -> dict:
+        """详情弹窗的自动保存：只提交 patch 里出现的字段。"""
+        if not isinstance(patch, dict):
+            return {"ok": False, "error": "patch 必须是对象"}
+
+        title = patch.get("title")
+        if title is not None:
+            title = str(title).strip()
+            if not title:
+                return {"ok": False, "error": "标题不能为空"}
+
+        status = patch.get("status")
+        if status is not None and status not in _STATUS_ALIASES:
+            return {"ok": False, "error": f"不支持的状态：{status}"}
+
+        dates: dict[str, DateValue] = {}
+        for name, value in (patch.get("dates") or {}).items():
+            if name not in (TRACK_SCHED, TRACK_DUE):
+                return {"ok": False, "error": f"不支持的日期属性：{name}"}
+            if not isinstance(value, dict) or not value.get("start"):
+                return {"ok": False, "error": f"「{name}」缺少 start"}
+            dates[name] = DateValue(
+                start=str(value["start"]),
+                end=str(value["end"]) if value.get("end") else None,
+                start_time=str(value["start_time"]) if value.get("start_time") else None,
+                end_time=str(value["end_time"]) if value.get("end_time") else None,
+                time_zone=str(value.get("time_zone") or TZ),
+            )
+
+        properties: dict[str, PropertyValue] = {}
+        for name, value in (patch.get("properties") or {}).items():
+            if not isinstance(value, dict) or "type" not in value:
+                return {"ok": False, "error": f"属性「{name}」格式不对"}
+            properties[name] = PropertyValue(str(value["type"]), value.get("value"))
+
+        if title is None and status is None and not dates and not properties:
+            return {"ok": False, "error": "没有要改的字段"}
+
+        try:
+            with NotionClient() as client:
+                if status is not None:
+                    properties["状态"] = PropertyValue("status", _resolve_status(client, status))
+                updated = client.update_task(
+                    task_id,
+                    title=title,
+                    dates=dates or None,
+                    properties=properties or None,
+                )
+            ui = to_ui([updated])
+            if not ui["tasks"]:
+                return {"ok": False, "error": "保存后任务没有日期"}
+            return {"ok": True, "task": ui["tasks"][0]}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 

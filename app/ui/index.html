@@ -349,6 +349,18 @@
     max-width: 62px; overflow: hidden; text-overflow: ellipsis;
   }
   .chip .late { color: #FF8FA3; letter-spacing: .01em; }
+  /* 外链按钮：绝对定位，不参与文字排版（hover 才出现） */
+  .chip .link {
+    position: absolute; right: 3px; top: 3px;
+    width: 16px; height: 16px; padding: 0; line-height: 15px;
+    border: 0; border-radius: 5px; text-align: center;
+    background: rgba(18,19,24,.82); color: #C9CAD6;
+    font-family: inherit; font-size: 10px; cursor: pointer;
+    opacity: 0; pointer-events: none;
+    transition: opacity .12s, background .12s, color .12s;
+  }
+  .chip:hover .link { opacity: 1; pointer-events: auto; }
+  .chip .link:hover { background: rgba(124,140,255,.5); color: #fff; }
   .tick { position: absolute; left: 0; width: 6px; height: 2px; border-radius: 2px; opacity: .7; }
 
   /* ---------------- 拖拽改期 ---------------- */
@@ -577,6 +589,66 @@
   .ctxmenu button:hover { background: rgba(255,255,255,.07); }
   .ctxmenu button.danger { color: #FF8FA3; }
 
+  /* ---------------- 详情弹窗 ---------------- */
+  .detail {
+    position: fixed; z-index: 80; display: none;
+    width: 266px; padding: 11px 12px 10px;
+    border-radius: 12px;
+    background: rgba(24,25,31,.97);
+    border: 1px solid rgba(255,255,255,.1);
+    box-shadow: 0 24px 60px -18px rgba(0,0,0,.92), inset 0 1px 0 rgba(255,255,255,.06);
+    backdrop-filter: blur(20px);
+  }
+  .detail.open { display: block; }
+  .detail .dtitle {
+    width: 100%; height: 29px; padding: 0 8px; margin-bottom: 8px;
+    border-radius: 7px; border: 1px solid rgba(255,255,255,.1);
+    background: rgba(255,255,255,.05); color: var(--text);
+    font-family: inherit; font-size: 12px; outline: 0;
+  }
+  .detail .dtitle:focus { border-color: rgba(124,140,255,.55); background: rgba(124,140,255,.09); }
+  .detail .dseg { display: flex; gap: 3px; margin-bottom: 8px; }
+  .detail .dseg button {
+    flex: 1; height: 23px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px;
+    background: rgba(255,255,255,.04); color: var(--faint);
+    font-family: inherit; font-size: 10.5px; cursor: pointer;
+  }
+  .detail .dseg button.on {
+    background: rgba(124,140,255,.2); border-color: rgba(124,140,255,.45); color: #E9EAF2;
+  }
+  .detail .drow { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+  .detail .dlab { width: 32px; flex: none; font-size: 10px; color: var(--faint); }
+  .detail .ddate, .detail .dtime, .detail .dsel {
+    height: 23px; padding: 0 4px; border-radius: 6px; outline: 0;
+    border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.05);
+    color: var(--text); font-family: inherit; font-size: 10.5px;
+  }
+  .detail .ddate { flex: 1; min-width: 0; }
+  .detail .dtime { width: 58px; flex: none; }
+  .detail .dtime:disabled { opacity: .35; }
+  .detail .dsel { flex: 1; min-width: 0; }
+  .detail .dall { display: flex; align-items: center; gap: 3px; flex: none;
+                  font-size: 9.5px; color: var(--faint); }
+  .detail .dfoot {
+    display: flex; justify-content: space-between; gap: 6px; margin-top: 9px;
+    padding-top: 8px; border-top: 1px solid rgba(255,255,255,.06);
+  }
+  .detail .dfoot button {
+    height: 26px; padding: 0 9px; border-radius: 7px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05);
+    color: #D6D7E0; font-family: inherit; font-size: 10.5px;
+  }
+  .detail .dfoot button.primary {
+    background: rgba(124,140,255,.22); border-color: rgba(124,140,255,.45); color: #EDEEF7;
+  }
+  body.theme-light .detail { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.1); }
+  body.theme-light .detail .dtitle,
+  body.theme-light .detail .ddate,
+  body.theme-light .detail .dtime,
+  body.theme-light .detail .dsel { background: rgba(0,0,0,.04); border-color: rgba(0,0,0,.1); color: #1B1C22; }
+  body.theme-light .detail .dfoot button { color: #2B2C33; }
+  body.theme-light .detail .dseg button { color: #5A5C68; }
+
   /* 桌面壳模式：窗口本身就是面板，不画假桌面 */
   html:has(body.desktop) { background: transparent; }   /* 否则 html 的 #08090D 会挡住亚克力 */
   body.desktop { background: transparent; }
@@ -721,6 +793,33 @@
 </div>
 
 <div class="dragtip" id="dragtip"></div>
+
+<div class="detail" id="detail">
+  <input class="dtitle" id="dTitle" maxlength="200" placeholder="标题">
+  <div class="dseg" id="dStatus">
+    <button data-status="todo">未开始</button>
+    <button data-status="doing">进行中</button>
+    <button data-status="done">已完成</button>
+  </div>
+  <div class="drow" data-date="安排日期">
+    <span class="dlab">安排</span>
+    <input class="ddate" type="date">
+    <input class="dtime" type="time">
+    <label class="dall"><input type="checkbox" class="dallbox">全天</label>
+  </div>
+  <div class="drow" data-date="截止日期">
+    <span class="dlab">截止</span>
+    <input class="ddate" type="date">
+    <input class="dtime" type="time">
+    <label class="dall"><input type="checkbox" class="dallbox">全天</label>
+  </div>
+  <div class="drow"><span class="dlab">大方向</span><select class="dsel" id="dDir"></select></div>
+  <div class="drow"><span class="dlab">学科</span><select class="dsel" id="dSubject"></select></div>
+  <div class="dfoot">
+    <button class="primary" id="dOpen">在 Notion 打开</button>
+    <button id="dClose">关闭</button>
+  </div>
+</div>
 
 <script>window.__CFG__ = null;</script>
 <script>window.__DATA__ = null;</script>
@@ -886,6 +985,7 @@
         '<span class="dot ' + t.status + '"></span>' +
         '<span class="t">' + t.title + '</span>' +
       '</div>' +
+      '<button class="link" title="在 Notion 打开" aria-label="在 Notion 打开">↗</button>' +
       '<div class="row2">' +
         '<span>' + (allDay ? "全天" : hhmm(ts)) + '</span>' +
         (t.tag ? '<span class="tag">' + t.tag + '</span>' : '') +
@@ -1066,11 +1166,25 @@
     el.dataset.status = t.status || "";
     el.innerHTML = chipHtml(t, ts, late, key === "sched" ? t.allDaySched : t.allDayDue);
 
+    const linkBtn = el.querySelector(".link");
+    if (linkBtn) {
+      linkBtn.addEventListener("mousedown", e => {
+        e.preventDefault();     // 别让按钮抢焦点：否则会 scrollIntoView，时间轴会跳
+        e.stopPropagation();    // 也别启动拖拽
+      });
+      linkBtn.addEventListener("click", e => {
+        e.stopPropagation();
+        e.preventDefault();
+        const api = bridge();
+        if (api) api.open_task(t.id);
+      });
+    }
     el.addEventListener("click", e => {
       e.stopPropagation();
-      if (Date.now() - (el._dragEndedAt || 0) < 300) return;  // 拖拽刚结束，别当选中
+      if (Date.now() - (el._dragEndedAt || 0) < 300) return;  // 拖拽刚结束，不当点击
       document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
       el.classList.add("sel");
+      openDetail(t, key, el);
     });
     el.addEventListener("dblclick", () => {
       if (window.pywebview && window.pywebview.api) window.pywebview.api.open_task(t.id);
@@ -1385,6 +1499,7 @@
   document.querySelectorAll(".track").forEach(b =>
     b.addEventListener("click", () => setTrack(b.dataset.track)));
   window.addEventListener("keydown", e => {
+    if (e.key === "Escape") { closeDetail(); return; }
     if (e.target && e.target.tagName === "INPUT") return;
     if (e.key === "ArrowLeft") setTrack("sched");
     if (e.key === "ArrowRight") setTrack("due");
@@ -1416,6 +1531,256 @@
     document.getElementById("cntDue").textContent =
       lanes.due.querySelectorAll(".chip").length;
   }
+
+  /* ---------- 详情弹窗 ---------- */
+  const detail = document.getElementById("detail");
+  const dTitle = document.getElementById("dTitle");
+  const dStatus = document.getElementById("dStatus");
+  const dDir = document.getElementById("dDir");
+  const dSubject = document.getElementById("dSubject");
+  const STATUS_NAME = { todo: "未开始", doing: "进行中", done: "已完成" };
+  const DATE_ROWS = ["安排日期", "截止日期"];
+  let detailTask = null;
+  let detailSaved = null;
+  let detailTimer = null;
+  let detailBusy = false;
+
+  function dateRow(name) {
+    return detail.querySelector('.drow[data-date="' + name + '"]');
+  }
+
+  function setRow(name, hours, allDay) {
+    const row = dateRow(name);
+    const dateEl = row.querySelector(".ddate");
+    const timeEl = row.querySelector(".dtime");
+    const box = row.querySelector(".dallbox");
+    if (typeof hours !== "number") {
+      dateEl.value = ""; timeEl.value = ""; box.checked = false; timeEl.disabled = false;
+      return;
+    }
+    const d = new Date(base + hours * H);
+    dateEl.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+    box.checked = !!allDay;
+    timeEl.value = allDay ? "" : pad(d.getHours()) + ":" + pad(d.getMinutes());
+    timeEl.disabled = !!allDay;
+  }
+
+  function rowValue(name) {
+    const row = dateRow(name);
+    const start = row.querySelector(".ddate").value;
+    if (!start) return null;
+    const allDay = row.querySelector(".dallbox").checked;
+    const time = allDay ? "" : row.querySelector(".dtime").value;
+    return { start: start, start_time: time || null };
+  }
+
+  /* 下拉选项：优先用后端给的，缺失时从现有任务里现凑 */
+  function taskOptions(name) {
+    const given = (window.__DATA__ && window.__DATA__.options && window.__DATA__.options[name]) || [];
+    const set = new Set(given);
+    tasks.forEach(t => {
+      const v = name === "大方向" ? t.dir : t.subject;
+      if (v) set.add(v);
+    });
+    return [...set].sort();
+  }
+
+  function fillSelect(sel, options, value) {
+    const list = (options || []).slice();
+    if (value && list.indexOf(value) < 0) list.push(value);
+    sel.innerHTML = '<option value=""></option>' +
+      list.map(o => '<option value="' + o + '">' + o + "</option>").join("");
+    sel.value = value || "";
+  }
+
+  function currentStatus() {
+    const on = dStatus.querySelector("button.on");
+    return on ? on.dataset.status : "todo";
+  }
+
+  function readDetail() {
+    return {
+      title: dTitle.value.trim(),
+      status: currentStatus(),
+      dates: { "安排日期": rowValue("安排日期"), "截止日期": rowValue("截止日期") },
+      dir: dDir.value,
+      subject: dSubject.value
+    };
+  }
+
+  function placeDetail(el) {
+    detail.classList.add("open");            // 先显示才能量尺寸
+    const r = el.getBoundingClientRect();
+    const w = detail.offsetWidth;
+    const h = detail.offsetHeight;
+    let left = r.right + 10;
+    let top = r.top;
+    if (left + w > window.innerWidth - 8) {
+      const flipped = r.left - w - 10;
+      if (flipped >= 8) {
+        left = flipped;                       // 右边放不下 → 翻到左边
+      } else {
+        left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+        top = r.bottom + 8;                   // 两边都挤 → 放到卡片下面
+      }
+    }
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    detail.style.left = left + "px";
+    detail.style.top = top + "px";
+  }
+
+  function openDetail(t, key, el) {
+    if (!t) return;
+    detailTask = t;
+    dTitle.value = t.title || "";
+    dStatus.querySelectorAll("button").forEach(b =>
+      b.classList.toggle("on", b.dataset.status === (t.status || "todo")));
+    setRow("安排日期", t.sched, t.allDaySched);
+    setRow("截止日期", t.due, t.allDayDue);
+    fillSelect(dDir, taskOptions("大方向"), t.dir);
+    fillSelect(dSubject, taskOptions("学科"), t.subject);
+    detailBusy = false;
+    detailSaved = readDetail();
+    placeDetail(el);
+  }
+
+  function closeDetail() {
+    detail.classList.remove("open");
+    clearTimeout(detailTimer);
+    detailTimer = null;
+    detailTask = null;
+    detailSaved = null;
+  }
+
+  function revertDetail() {
+    if (!detailSaved) return;
+    dTitle.value = detailSaved.title;
+    dStatus.querySelectorAll("button").forEach(b =>
+      b.classList.toggle("on", b.dataset.status === detailSaved.status));
+    DATE_ROWS.forEach(name => {
+      const v = detailSaved.dates[name];
+      const row = dateRow(name);
+      const allDay = !!(v && !v.start_time);
+      row.querySelector(".ddate").value = v ? v.start : "";
+      row.querySelector(".dtime").value = v && v.start_time ? v.start_time : "";
+      row.querySelector(".dallbox").checked = allDay;
+      row.querySelector(".dtime").disabled = allDay;
+    });
+    dDir.value = detailSaved.dir || "";
+    dSubject.value = detailSaved.subject || "";
+  }
+
+  /* 更新该任务的所有卡片（两条轨道都可能挂），必要时补挂或移除 */
+  function refreshChips(t) {
+    ["sched", "due"].forEach(key => {
+      const hasValue = typeof t[key] === "number";
+      if (!hasValue) {
+        items[key].forEach(item => { if (item.t.id === t.id) item.el.remove(); });
+        items[key] = items[key].filter(item => item.t.id !== t.id);
+      } else {
+        let item = items[key].find(it => it.t.id === t.id);
+        if (!item) {
+          item = mountChip(t, key);
+          if (item) items[key].push(item);
+        }
+        if (item) {
+          const el = item.el;
+          el.querySelector(".t").textContent = t.title;
+          el.dataset.status = t.status || "";
+          const dot = el.querySelector(".dot");
+          if (dot) dot.className = "dot " + (t.status || "");
+          el.classList.toggle("done", t.status === "done");
+          item.y = yOf(base + t[key] * H);
+          const timeSpan = el.querySelector(".row2 span");
+          if (timeSpan) timeSpan.textContent = t[ALL_DAY_KEY[key]] ? "全天" : hhmm(base + t[key] * H);
+          const late = key === "due" && base + t[key] * H < nowTs && t.status !== "done";
+          el.classList.toggle("overdue", late);
+        }
+      }
+      layoutLane(key);
+    });
+  }
+
+  function applyDetailResult(uiTask) {
+    const t = detailTask;
+    if (!t) return;
+    ["title", "status", "tag", "dir", "subject", "sched", "due", "allDaySched", "allDayDue"]
+      .forEach(k => {
+        if (k in uiTask) t[k] = uiTask[k];
+        else delete t[k];
+      });
+    refreshChips(t);
+  }
+
+  async function saveDetail() {
+    if (!detailTask || !detailSaved || detailBusy) return;
+    const next = readDetail();
+    const patch = {};
+    if (next.title && next.title !== detailSaved.title) patch.title = next.title;
+    if (next.status !== detailSaved.status) patch.status = STATUS_NAME[next.status];
+    const dates = {};
+    DATE_ROWS.forEach(name => {
+      const v = next.dates[name];
+      if (v && JSON.stringify(v) !== JSON.stringify(detailSaved.dates[name])) dates[name] = v;
+    });
+    if (Object.keys(dates).length) patch.dates = dates;
+    const props = {};
+    if (next.dir !== detailSaved.dir) props["大方向"] = { type: "select", value: next.dir || null };
+    if (next.subject !== detailSaved.subject) props["学科"] = { type: "select", value: next.subject || null };
+    if (Object.keys(props).length) patch.properties = props;
+    if (!Object.keys(patch).length) return;
+
+    const api = bridge();
+    if (!api) return;
+    detailBusy = true;
+    const res = await api.update_task_fields(detailTask.id, patch);
+    detailBusy = false;
+    if (res && res.ok && res.task) {
+      detailSaved = next;
+      applyDetailResult(res.task);
+    } else {
+      revertDetail();
+      alert("保存失败：" + ((res && res.error) || "未知错误"));
+    }
+  }
+
+  function scheduleSave() {
+    clearTimeout(detailTimer);
+    detailTimer = setTimeout(saveDetail, 500);
+  }
+
+  dTitle.addEventListener("input", scheduleSave);
+  dDir.addEventListener("change", scheduleSave);
+  dSubject.addEventListener("change", scheduleSave);
+  dStatus.addEventListener("click", e => {
+    const btn = e.target.closest("button[data-status]");
+    if (!btn) return;
+    dStatus.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === btn));
+    scheduleSave();
+  });
+  DATE_ROWS.forEach(name => {
+    const row = dateRow(name);
+    row.querySelector(".ddate").addEventListener("change", scheduleSave);
+    row.querySelector(".dtime").addEventListener("change", scheduleSave);
+    row.querySelector(".dallbox").addEventListener("change", () => {
+      const box = row.querySelector(".dallbox");
+      const timeEl = row.querySelector(".dtime");
+      timeEl.disabled = box.checked;
+      if (box.checked) timeEl.value = "";
+      scheduleSave();
+    });
+  });
+  document.getElementById("dOpen").addEventListener("click", () => {
+    if (!detailTask) return;
+    const api = bridge();
+    if (api) api.open_task(detailTask.id);
+  });
+  document.getElementById("dClose").addEventListener("click", closeDetail);
+  document.addEventListener("click", e => {
+    if (!detail.classList.contains("open")) return;
+    if (e.target.closest("#detail")) return;
+    closeDetail();
+  });
 
   window.__hud = {
     add(task) {

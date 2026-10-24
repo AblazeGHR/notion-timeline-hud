@@ -440,6 +440,10 @@ class NotionClient:
             if not cursor:
                 return tasks
 
+    def get_data_source(self, data_source_id: str) -> dict[str, Any]:
+        """GET /v1/data_sources/{id}：拿属性定义（选项名随库不同，写之前要核对）。"""
+        return self._request("GET", f"/v1/data_sources/{data_source_id}")
+
     def get_task(self, page_id: str) -> Task:
         """GET /v1/pages/{id}：改期前先读当前日期值，避免拿 UI 里的旧数据平移。"""
         return _task_from_page(self._request("GET", f"/v1/pages/{page_id}"))
