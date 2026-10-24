@@ -470,14 +470,14 @@
 
   /* ---------------- now 线 ---------------- */
   .nowline {
-    position: absolute; left: var(--gutter); right: 0; top: 50%;
-    height: 1px; z-index: 1; pointer-events: none;
+    position: absolute; left: var(--gutter); right: 0; top: 0;
+    height: 1px; pointer-events: none;              /* 在卡片下面（DOM 在 lanes 之前） */
     background: linear-gradient(90deg, rgba(255,107,138,.7), rgba(255,107,138,.2) 52%, rgba(255,107,138,.04));
     box-shadow: 0 0 10px rgba(255,107,138,.4);
   }
   .nowbadge {
-    position: absolute; left: var(--gutter); right: 0; top: 50%;
-    height: 0; z-index: 9; pointer-events: none;
+    position: absolute; left: var(--gutter); right: 0; top: 0;
+    height: 0; z-index: 30; pointer-events: none;   /* 高于卡片 */
   }
   .nowbadge .glow {
     position: absolute; left: -10px; top: -13px; width: 30px; height: 27px;
@@ -1506,6 +1506,7 @@
     canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
     rebuildDayMarks();
     rebuildHourTicks();
+    updateNowMarker();
     ["sched", "due"].forEach(key => {
       items[key].length = 0;
       lanes[key].innerHTML = "";
@@ -1525,10 +1526,27 @@
     if (bar && bar.classList.contains("open")) applySearch(searchInput.value);
   }
 
+  /* now 标记写进 canvas：随内容滚动，每 30s 刷新位置与时间 */
+  const nowlineEl = document.getElementById("nowline");
+  const nowbadgeEl = document.querySelector(".nowbadge");
+  canvas.insertBefore(nowlineEl, lanes.sched);   // 线在卡片下面
+  canvas.appendChild(nowbadgeEl);                // 徽标在最上面
+
+  function updateNowMarker() {
+    const ts = Date.now();
+    const y = yOf(ts);
+    nowlineEl.style.top = y + "px";
+    nowbadgeEl.style.top = y + "px";
+    const timeEl = document.getElementById("nowtime");
+    if (timeEl) timeEl.textContent = hhmm(ts);
+  }
+
   function scrollToNow(animate) {
-    const target = yOf(nowTs) - scroll.clientHeight / 2;
+    const target = yOf(Date.now()) - scroll.clientHeight / 2;
     scroll.scrollTo({ top: Math.max(0, target), behavior: animate ? "smooth" : "auto" });
   }
+  updateNowMarker();
+  setInterval(updateNowMarker, 30_000);
   requestAnimationFrame(() => scrollToNow(false));
   window.addEventListener("resize", () => scrollToNow(false));
   document.getElementById("btnRefresh").addEventListener("click", async () => {
