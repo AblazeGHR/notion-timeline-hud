@@ -854,6 +854,10 @@
       </span>
     </div>
     <div class="srow">
+      <span>在 Notion 应用中打开</span>
+      <span class="switch on" id="swOpenInApp" data-toggle></span>
+    </div>
+    <div class="srow">
       <span>开机自启</span>
       <span class="switch on" id="swAutostart" data-toggle></span>
     </div>
@@ -1557,6 +1561,7 @@
   const slider = document.getElementById("opacitySlider");
   const themeSeg = document.getElementById("themeSeg");
   const swAutostart = document.getElementById("swAutostart");
+  const swOpenInApp = document.getElementById("swOpenInApp");
   const swRelease = document.getElementById("swRelease");
   const hotkeyKeys = document.getElementById("hotkeyKeys");
 
@@ -1619,6 +1624,19 @@
         alert("主题切换失败：" + ((res && res.error) || "未知错误"));
       }
     });
+  });
+
+  swOpenInApp.addEventListener("click", async e => {
+    e.stopPropagation();
+    const target = !swOpenInApp.classList.contains("on");
+    swOpenInApp.classList.toggle("on", target);   // 先动，失败回滚
+    const api = bridge();
+    if (!api) return;
+    const res = await api.set_config({ open_in_app: target });
+    if (!res || !res.ok) {
+      swOpenInApp.classList.toggle("on", !target);
+      alert("保存失败：" + ((res && res.error) || "未知错误"));
+    }
   });
 
   swAutostart.addEventListener("click", async () => {
@@ -1691,6 +1709,7 @@
       if (actual && actual.ok && actual.enabled !== null) autostartOn = !!actual.enabled;
     }
     swAutostart.classList.toggle("on", autostartOn);
+    swOpenInApp.classList.toggle("on", cfg.open_in_app !== false);
     swRelease.classList.toggle("on", Number(cfg.release_memory_minutes) > 0);
     hotkeyKeys.innerHTML = String(cfg.hotkey || "")
       .split("+").filter(Boolean)

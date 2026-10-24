@@ -21,6 +21,7 @@ import queue
 import sys
 import threading
 import time
+import webbrowser
 from ctypes import wintypes
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
@@ -643,6 +644,42 @@ def set_autostart(enable: bool) -> str:
             return "本来就没有自启项"
 
 
+# ---------------------------------------------------------------- Notion 链接
+
+
+def notion_protocol_registered() -> bool:
+    """notion:// 有没有被注册（先看用户级，再看 HKCR）。读不到就当没注册。"""
+    import winreg
+
+    for root, path in (
+        (winreg.HKEY_CURRENT_USER, r"Software\Classes\notion\shell\open\command"),
+        (winreg.HKEY_CLASSES_ROOT, r"notion\shell\open\command"),
+    ):
+        try:
+            with winreg.OpenKey(root, path, 0, winreg.KEY_READ) as key:
+                value, _ = winreg.QueryValueEx(key, "")
+                if str(value).strip():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def build_notion_uri(
+    page_id: str, prefer_app: bool = True, *, registered: bool | None = None
+) -> str:
+    """拼 Notion 链接：能拉起桌面端就用 notion://，否则用网页地址。
+
+    registered 只给测试用（None 表示现场读注册表）。
+    """
+    clean = str(page_id).replace("-", "").strip()
+    if not clean:
+        raise ValueError("page_id 不能为空")
+    use_app = prefer_app and (notion_protocol_registered() if registered is None else registered)
+    scheme = "notion://" if use_app else "https://"
+    return f"{scheme}www.notion.so/{clean}"
+
+
 # ---------------------------------------------------------------- 状态选项
 
 _status_option_cache: dict[str, list[str]] = {}
@@ -834,10 +871,21 @@ class Api:
         data, source, error = load()
         return {"data": data, "source": source, "error": error}
 
-    def open_task(self, task_id: str) -> None:
-        import webbrowser
-
-        webbrowser.open("https://www.notion.so/" + task_id.replace("-", ""))
+    def open_task(self, task_id: str) -> dict:
+        """卡片 ↗ 和详情里的按钮都走这里：优先桌面端，失败回退网页。"""
+        prefer_app = bool(state["config"].get("open_in_app", True))
+        uri = build_notion_uri(task_id, prefer_app)
+        if uri.startswith("notion://"):
+            try:
+                os.startfile(uri)  # 交给协议处理器（Notion.exe）
+                print(f"open_task: 桌面端 {uri}", flush=True)
+                return {"ok": True, "via": "app", "uri": uri}
+            except Exception as exc:  # noqa: BLE001 - 没装/被拦都回退网页
+                print(f"open_task: 桌面端失败（{exc}），回退网页", flush=True)
+        web_url = build_notion_uri(task_id, False)
+        webbrowser.open(web_url)
+        print(f"open_task: 网页 {web_url}", flush=True)
+        return {"ok": True, "via": "web", "uri": web_url}
 
     # ---- 写入（全部走 API，只动 DATA_SOURCE_ID 指向的库） ----
 

@@ -19,6 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "opacity": 0.82,
     "timeline_scale": 14.0,
     "font_scale": 1.0,
+    "open_in_app": True,
     "theme": "dark",
     "hide_on_blur": True,
     "release_memory_minutes": 15,
@@ -162,6 +163,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "release_memory_minutes": _as_minutes,
     "refresh_seconds": _as_refresh_seconds,
     "autostart": lambda v: _as_bool(v, "autostart"),
+    "open_in_app": lambda v: _as_bool(v, "open_in_app"),
 }
 
 
