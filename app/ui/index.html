@@ -501,6 +501,12 @@
     -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%;
     background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.55); cursor: pointer;
   }
+  .density { display: flex; align-items: center; gap: 7px; }
+  .density .slider { width: 66px; }
+  .density b {
+    font-weight: 400; font-size: 9.5px; color: var(--faint);
+    min-width: 46px; text-align: right; font-variant-numeric: tabular-nums;
+  }
   .seg { display: flex; gap: 2px; background: rgba(255,255,255,.055); padding: 2px; border-radius: 7px; }
   .seg button {
     border: 0; background: transparent; color: var(--faint);
@@ -668,6 +674,13 @@
       <input type="range" class="slider" id="opacitySlider" min="40" max="95" value="66">
     </div>
     <div class="srow">
+      <span>时间轴密度</span>
+      <span class="density">
+        <input type="range" class="slider" id="scaleSlider" min="6" max="40" step="0.5" value="14">
+        <b id="scaleValue">14 px/h</b>
+      </span>
+    </div>
+    <div class="srow">
       <span>主题</span>
       <span class="seg" id="themeSeg">
         <button class="on" data-theme="dark">深色</button>
@@ -698,6 +711,7 @@
 
 <div class="dragtip" id="dragtip"></div>
 
+<script>window.__CFG__ = null;</script>
 <script>window.__DATA__ = null;</script>
 <script>
 (() => {
@@ -724,11 +738,21 @@
   const base = new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate()).getTime();
   const nowTs = NOW.getTime();
 
-  const PX_PER_HOUR = 14;
-  const PX_PER_MIN = PX_PER_HOUR / 60;
+  /* 时间轴密度：px/hour。滚轮只改临时值，配置里的 timeline_scale 是默认值 */
+  const SCALE_MIN = 6, SCALE_MAX = 40, SCALE_WHEEL_FACTOR = 1.15;
+  const CFG = window.__CFG__ || {};
+  let DEFAULT_SCALE = clampScale(CFG.timeline_scale == null ? 14 : CFG.timeline_scale);
+  let PX_PER_HOUR = DEFAULT_SCALE;
+  let PX_PER_MIN = PX_PER_HOUR / 60;
   let START_DAY = -2;
   let DAYS = 8;
   let canvasStart = base + START_DAY * DAY;
+
+  function clampScale(value) {
+    const v = Math.round(Number(value) * 2) / 2;   // 取整到 0.5
+    if (!isFinite(v)) return 14;
+    return Math.min(SCALE_MAX, Math.max(SCALE_MIN, v));
+  }
 
   /* at = 相对今天 0 点的小时数 */
   const MOCK_TASKS = [
@@ -793,6 +817,8 @@
   const scroll = document.getElementById("scroll");
   canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
 
+  const dayMarks = [];   // 缩放时按 index 重算 top
+
   for (let i = 0; i < DAYS; i++) {
     const ts = canvasStart + i * DAY;
     const d = new Date(ts);
@@ -812,6 +838,7 @@
       '<span class="wd">' + WEEK[d.getDay()].replace("周", "") + '</span></span>' +
       (isToday ? '<span class="today-pill">今天</span>' : "");
     canvas.appendChild(label);
+    dayMarks.push({ index: i, line, label });
   }
 
   const lanes = {
@@ -851,6 +878,7 @@
   const ALL_DAY_KEY = { sched: "allDaySched", due: "allDayDue" };
   const DRAG_SNAP_MIN = 15;   // 吸附粒度
   const DRAG_CLICK_PX = 4;    // 位移小于这个像素数算点击，不写
+  let dragActive = false;     // 拖拽中忽略缩放，否则像素位移和分钟数会换算错
 
   /* 位移像素 → 分钟，按 15 分钟取整 */
   function dragMinutes(dy) {
@@ -875,6 +903,7 @@
 
     e.preventDefault();    // 禁掉原生文本选择 / 拖影
     e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动
+    dragActive = true;
     document.body.classList.add("drag-lock");   // 拖拽期间禁选中、禁滚动
 
     const restore = () => {
@@ -883,6 +912,7 @@
     };
 
     const detach = () => {
+      dragActive = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("blur", onCancel);
@@ -983,7 +1013,7 @@
     });
 
     lanes[key].appendChild(el);
-    return { el, y: yOf(ts), h: el.offsetHeight };
+    return { el, y: yOf(ts), h: el.offsetHeight, t, key };
   }
 
   function layoutLane(key) {
@@ -1049,6 +1079,55 @@
   window.addEventListener("resize", () => scrollToNow(false));
   document.getElementById("btnRefresh").addEventListener("click", () => scrollToNow(true));
 
+  /* ---------- 时间轴密度（px/hour） ---------- */
+  function updateScaleLabel() {
+    const label = document.getElementById("scaleValue");
+    if (label) {
+      const shown = Number.isInteger(PX_PER_HOUR) ? String(PX_PER_HOUR) : PX_PER_HOUR.toFixed(1);
+      label.textContent = shown + " px/h";
+    }
+    const sliderEl = document.getElementById("scaleSlider");
+    if (sliderEl) sliderEl.value = String(PX_PER_HOUR);
+  }
+
+  /* 换密度并重排。anchorY 是视口坐标：缩放前后该 y 下的时刻不动 */
+  function applyScale(next, anchorY) {
+    const target = clampScale(next);
+    if (dragActive) return PX_PER_HOUR;   // 拖拽中不缩放（见 dragActive 注释）
+    if (target === PX_PER_HOUR) return PX_PER_HOUR;
+
+    const rect = scroll.getBoundingClientRect();
+    const fromTop = (typeof anchorY === "number")
+      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top))
+      : scroll.clientHeight / 2;
+    const anchorTs = canvasStart + ((scroll.scrollTop + fromTop) / PX_PER_MIN) * 60000;
+
+    PX_PER_HOUR = target;
+    PX_PER_MIN = target / 60;
+
+    canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
+    dayMarks.forEach(mark => {
+      const y = mark.index * 24 * PX_PER_HOUR;
+      mark.line.style.top = y + "px";
+      mark.label.style.top = y + "px";
+    });
+    ["sched", "due"].forEach(key => {
+      items[key].forEach(item => { item.y = yOf(base + item.t[item.key] * H); });
+      layoutLane(key);   // 重算避让与 tick
+    });
+    scroll.scrollTop = Math.max(0, ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
+    updateScaleLabel();
+    return PX_PER_HOUR;
+  }
+
+  /* 隐藏后回默认值；居中到 now */
+  function resetScale() {
+    applyScale(DEFAULT_SCALE);
+    requestAnimationFrame(() => scrollToNow(false));
+  }
+
+  updateScaleLabel();
+
   const settings = document.getElementById("settings");
   document.getElementById("btnSettings").addEventListener("click", e => {
     e.stopPropagation();
@@ -1084,6 +1163,27 @@
       paintSlider(previous);
       alert("透明度没保存上：" + ((res && res.error) || "未知错误"));
     }
+  });
+
+  const scaleSlider = document.getElementById("scaleSlider");
+  let scaleSaveTimer = null;
+  scaleSlider.addEventListener("input", () => {
+    const value = clampScale(scaleSlider.value);
+    DEFAULT_SCALE = value;      // 滑块 = 新的默认密度
+    applyScale(value);          // 即时生效
+    clearTimeout(scaleSaveTimer);
+    scaleSaveTimer = setTimeout(async () => {
+      const api = bridge();
+      if (!api) return;
+      const res = await api.set_config({ timeline_scale: value });
+      if (!res || !res.ok) {
+        alert("密度没保存上：" + ((res && res.error) || "未知错误"));
+        if (res && res.config) {
+          DEFAULT_SCALE = clampScale(res.config.timeline_scale);
+          applyScale(DEFAULT_SCALE);
+        }
+      }
+    }, 300);
   });
 
   themeSeg.querySelectorAll("button").forEach(btn => {
@@ -1144,12 +1244,26 @@
     hotkeyKeys.innerHTML = String(cfg.hotkey || "")
       .split("+").filter(Boolean)
       .map(k => "<kbd>" + k.trim() + "</kbd>").join("");
+    if (cfg.timeline_scale != null) {
+      DEFAULT_SCALE = clampScale(cfg.timeline_scale);
+      applyScale(DEFAULT_SCALE);
+    }
   }
   if (window.pywebview) syncConfig();
   else window.addEventListener("pywebviewready", syncConfig);
 
   /* ---------- 轨道切换 ---------- */
   const timelineEl = document.getElementById("timeline");
+
+  /* Ctrl + 滚轮：改密度（吃掉 WebView2 的页面缩放）；普通滚轮照常滚动 */
+  timelineEl.addEventListener("wheel", e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const next = PX_PER_HOUR * (e.deltaY < 0 ? SCALE_WHEEL_FACTOR : 1 / SCALE_WHEEL_FACTOR);
+    applyScale(next, e.clientY);
+  }, { passive: false });
+
   document.getElementById("cntSched").textContent = tasks.filter(t => typeof t.sched === "number").length;
   document.getElementById("cntDue").textContent = tasks.filter(t => typeof t.due === "number").length;
 
@@ -1205,6 +1319,10 @@
         el.classList.toggle("done", status === "done");
       });
     },
+    /* 密度调试/自测入口 */
+    setScale(value) { return applyScale(value); },
+    getScale() { return PX_PER_HOUR; },
+    resetScale() { resetScale(); return PX_PER_HOUR; },
   };
 
   const ctx = document.getElementById("ctxmenu");

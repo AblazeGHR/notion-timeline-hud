@@ -182,9 +182,29 @@ def cancel_memory_trim() -> None:
 # ---------------------------------------------------------------- 窗口动作
 
 
+def reset_timeline_scale(window: webview.Window, *, offload: bool = False) -> None:
+    """把 Ctrl+滚轮调出来的临时密度丢回配置默认值（必须在 hide 之前调）。
+
+    offload=True 丢到后台线程：Api.hide 是从 JS 线程进来的，同步 evaluate_js
+    会和该线程的消息循环互锁。
+    """
+
+    def run() -> None:
+        try:
+            window.evaluate_js("window.__hud && window.__hud.resetScale()")
+        except Exception as exc:  # noqa: BLE001 - 窗口正在销毁时忽略
+            print("重置密度失败（可忽略）：", exc, flush=True)
+
+    if offload:
+        threading.Thread(target=run, daemon=True).start()
+    else:
+        run()
+
+
 def toggle(window: webview.Window) -> None:
     try:
         if state["visible"]:
+            reset_timeline_scale(window)
             window.hide()
             state["visible"] = False
             schedule_memory_trim()
@@ -248,6 +268,7 @@ def blur_watch(window: webview.Window) -> None:
             continue
         if root and root != state["hwnd"]:
             try:
+                reset_timeline_scale(window)
                 window.hide()
                 state["visible"] = False
                 schedule_memory_trim()
@@ -321,6 +342,7 @@ class Api:
 
     def hide(self) -> None:
         if self._window:
+            reset_timeline_scale(self._window, offload=True)  # 从 JS 线程进来，别同步等
             self._window.hide()
             state["visible"] = False
             schedule_memory_trim()
@@ -502,7 +524,10 @@ def render_html() -> str:
     if error:
         print("回落原因:", error[:200], flush=True)
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    return template.replace("window.__DATA__ = null;", f"window.__DATA__ = {payload};")
+    config_payload = json.dumps(state["config"], ensure_ascii=False).replace("</", "<\\/")
+    html = template.replace("window.__DATA__ = null;", f"window.__DATA__ = {payload};")
+    # 密度在首帧就用配置值渲染，避免加载完再跳一下
+    return html.replace("window.__CFG__ = null;", f"window.__CFG__ = {config_payload};")
 
 
 def main() -> None:

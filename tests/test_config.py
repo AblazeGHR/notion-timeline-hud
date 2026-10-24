@@ -100,6 +100,27 @@ def test_minutes_accepts_integral_float() -> None:
         raise AssertionError(f"应该拒绝 {bad!r}")
 
 
+def test_timeline_scale() -> None:
+    path = _tmpdir() / "config.json"
+    cfg = config.load(path)
+    assert cfg["timeline_scale"] == 14.0, cfg
+    for good, want in ((6, 6.0), (40, 40.0), (22.5, 22.5), (14.3, 14.5), ("18", None)):
+        if want is None:
+            try:
+                config.patch({"timeline_scale": good}, path)
+            except ValueError:
+                continue
+            raise AssertionError(f"应该拒绝 {good!r}")
+        assert config.patch({"timeline_scale": good}, path)["timeline_scale"] == want
+    for bad in (5.9, 40.1, 0, -1, True, "high", None):
+        try:
+            config.patch({"timeline_scale": bad}, path)
+        except ValueError:
+            continue
+        raise AssertionError(f"应该拒绝 {bad!r}")
+    assert config.load(path)["timeline_scale"] == 14.5, "失败后应保留上一次合法值"
+
+
 def test_parse_hotkey() -> None:
     assert config.parse_hotkey("Ctrl+Alt+Space") == (config.MOD_CONTROL | config.MOD_ALT, 0x20)
     assert config.parse_hotkey("ctrl+shift+f9") == (config.MOD_CONTROL | config.MOD_SHIFT, 0x78)
