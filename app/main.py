@@ -54,6 +54,19 @@ WM_NCLBUTTONDOWN = 0x00A1
 HTCAPTION = 2
 HWND_TOPMOST = -1
 SWP_SHOWWINDOW = 0x0040
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+DWMSBT_TRANSIENTWINDOW = 3
+
+dwmapi = ctypes.windll.dwmapi
+
+
+class MARGINS(ctypes.Structure):
+    _fields_ = [
+        ("cLeft", ctypes.c_int),
+        ("cRight", ctypes.c_int),
+        ("cTop", ctypes.c_int),
+        ("cBottom", ctypes.c_int),
+    ]
 HOTKEY_ID_TOGGLE = 1
 HOTKEY_ID_QUIT = 2
 
@@ -139,6 +152,39 @@ class WINCOMPATTRDATA(ctypes.Structure):
         ("Data", ctypes.c_void_p),
         ("SizeOfData", ctypes.c_size_t),
     ]
+
+
+def enable_transparency(hwnd: int, form: object) -> str:
+    """让窗口真正透出桌面（之前面板底下垫的是 WinForms 的 #F0F0F0）。
+
+    实测（2026-10-24）：BrowserForm.BackColor = Control(#F0F0F0)、TransparencyKey 未设、
+    AllowTransparency=False、窗口没有 WS_EX_LAYERED —— 所以 WebView2 即使设了
+    DefaultBackgroundColor=Transparent，透明处也只能透出 Form 底色，白/黑壁纸截图逐字节相同。
+    修法两条：
+      1) Form 底色改黑，别让 #F0F0F0 当背板；
+      2) Win11 系统背景（DWMSBT_TRANSIENTWINDOW）+ 扩展边框，DWM 才会在客户区画亚克力背板。
+    """
+    notes: list[str] = []
+    try:
+        from System.Drawing import Color
+
+        form.BackColor = Color.Black
+        notes.append("BackColor=Black")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"BackColor 失败: {exc}")
+
+    try:
+        value = ctypes.c_int(DWMSBT_TRANSIENTWINDOW)
+        hr = dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), DWMWA_SYSTEMBACKDROP_TYPE,
+            ctypes.byref(value), ctypes.sizeof(value),
+        )
+        margins = MARGINS(-1, -1, -1, -1)
+        hr2 = dwmapi.DwmExtendFrameIntoClientArea(ctypes.c_void_p(hwnd), ctypes.byref(margins))
+        notes.append(f"backdrop hr={hr}/{hr2}")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"backdrop 失败: {exc}")
+    return ", ".join(notes)
 
 
 def apply_acrylic(hwnd: int) -> bool:
@@ -800,6 +846,9 @@ def main() -> None:
             left, top, right, bottom = fit_to_screen(hwnd)
             print(f"fit_to_screen -> ({left},{top},{right},{bottom})", flush=True)
             ok = apply_acrylic(hwnd) if not args.no_blur else False
+            # 顺序要紧：DWM 系统背景必须最后设，否则会被 SetWindowCompositionAttribute 覆盖
+            transparency = enable_transparency(hwnd, window.native)
+            print(f"transparency -> {transparency}", flush=True)
             print(f"hwnd={hwnd} pos=({x},{y}) size=({WIDTH},{height}) "
                   f"screen=({screen_w},{screen_h}) acrylic={'ok' if ok else 'skip/fail'}",
                   flush=True)
