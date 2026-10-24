@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import queue
@@ -205,6 +206,54 @@ def apply_acrylic(hwnd: int) -> bool:
         return bool(user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
     except Exception:  # noqa: BLE001
         return False
+
+
+# ---------------------------------------------------------------- 后台刷新
+
+
+def data_digest(data: dict) -> str:
+    """标题/状态/日期（外加 tag/方向/学科）的指纹，用来判断要不要重渲染。"""
+    tasks = data.get("tasks") or []
+    rows = [
+        (t.get("id"), t.get("title"), t.get("status"), t.get("sched"), t.get("due"),
+         bool(t.get("allDaySched")), bool(t.get("allDayDue")),
+         t.get("tag"), t.get("dir"), t.get("subject"))
+        for t in tasks
+    ]
+    rows.sort(key=lambda row: str(row[0]))
+    undated = [(u.get("title"), u.get("status"), u.get("tag")) for u in data.get("undated") or []]
+    raw = json.dumps([rows, undated], ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def refresh_loop(window: webview.Window, initial_digest: str) -> None:
+    """每 refresh_seconds 秒静默拉一次；没变化不动界面，失败只记日志。"""
+    last = initial_digest
+    while True:
+        seconds = int(state["config"].get("refresh_seconds", 120) or 0)
+        time.sleep(max(5, seconds) if seconds > 0 else 30)
+        if seconds <= 0:
+            continue
+        try:
+            data, source, error = load()
+        except Exception as exc:  # noqa: BLE001
+            print("后台刷新失败:", exc, flush=True)
+            continue
+        digest = data_digest(data)
+        if digest == last:
+            print(f"后台刷新：无变化（source={source}）", flush=True)
+            continue
+        last = digest
+        payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+        status = json.dumps({"source": source, "error": (error or "")[:200]}, ensure_ascii=False)
+        try:
+            window.evaluate_js(
+                f"window.__hud && window.__hud.setData({payload});"
+                f"window.__hud && window.__hud.setStatus({status});"
+            )
+            print(f"后台刷新：已重渲染（source={source}）", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print("后台刷新推送失败:", exc, flush=True)
 
 
 # ---------------------------------------------------------------- 单实例
@@ -874,6 +923,8 @@ def render_html() -> str:
         print("回落原因:", error[:200], flush=True)
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     config_payload = json.dumps(state["config"], ensure_ascii=False).replace("</", "<\\/")
+    state["data_digest"] = data_digest(data)
+    state["data_source"] = source
     html = template.replace("window.__DATA__ = null;", f"window.__DATA__ = {payload};")
     # 密度在首帧就用配置值渲染，避免加载完再跳一下
     return html.replace("window.__CFG__ = null;", f"window.__CFG__ = {config_payload};")
@@ -966,6 +1017,10 @@ def main() -> None:
     ).start()
     if not args.keep_open:
         threading.Thread(target=blur_watch, args=(window,), daemon=True).start()
+
+    threading.Thread(
+        target=refresh_loop, args=(window, state.get("data_digest") or ""), daemon=True
+    ).start()
 
     print(f"{config['hotkey']} 唤出/收起，Ctrl+Alt+Q 退出", flush=True)
     print("pid:", os.getpid(), flush=True)

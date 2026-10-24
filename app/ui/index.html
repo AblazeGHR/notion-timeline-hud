@@ -2167,6 +2167,24 @@
         el.classList.toggle("done", status === "done");
       });
     },
+    /* 后台刷新推过来的整包数据：保持视口中心时刻与当前轨道 */
+    setData(data) {
+      if (!data || !Array.isArray(data.tasks)) return false;
+      const track = document.getElementById("timeline").dataset.track;
+      const rect = scroll.getBoundingClientRect();
+      const centerTs = tsAtPoint(rect.top + scroll.clientHeight / 2);
+      tasks.length = 0;
+      tasks.push(...data.tasks);
+      undated.length = 0;
+      undated.push(...(data.undated || []));
+      if (data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, data);
+      renderTimeline();
+      setTrack(track);
+      scroll.scrollTop = Math.max(
+        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
+      return true;
+    },
+
     /* 密度/字号调试自测入口 */
     setScale(value) { return applyScale(value); },
     getScale() { return PX_PER_HOUR; },

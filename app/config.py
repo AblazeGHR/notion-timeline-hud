@@ -22,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
     "theme": "dark",
     "hide_on_blur": True,
     "release_memory_minutes": 15,
+    "refresh_seconds": 120,
     "autostart": False,
 }
 
@@ -113,6 +114,18 @@ def _as_font_scale(value: Any) -> float:
     return round(number, 2)
 
 
+def _as_refresh_seconds(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("refresh_seconds 必须是 0~3600 的整数秒")
+    if isinstance(value, float) and not value.is_integer():
+        number = value
+    else:
+        number = value
+    if not 0 <= number <= 3600:
+        raise ValueError("refresh_seconds 必须在 0~3600 之间")
+    return int(number)
+
+
 def _as_theme(value: Any) -> str:
     if value not in ("dark", "light"):
         raise ValueError("theme 只能是 dark 或 light")
@@ -147,6 +160,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "theme": _as_theme,
     "hide_on_blur": lambda v: _as_bool(v, "hide_on_blur"),
     "release_memory_minutes": _as_minutes,
+    "refresh_seconds": _as_refresh_seconds,
     "autostart": lambda v: _as_bool(v, "autostart"),
 }
 
