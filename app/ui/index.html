@@ -718,7 +718,7 @@
   /* ---------------- 详情弹窗 ---------------- */
   .detail {
     position: fixed; z-index: 80; display: none;
-    width: 266px; padding: 11px 12px 10px;
+    width: 308px; padding: 10px 12px 10px;
     border-radius: 12px;
     background: rgba(24,25,31,.97);
     border: 1px solid rgba(255,255,255,.1);
@@ -764,6 +764,58 @@
     border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05);
     color: #D6D7E0; font-family: inherit; font-size: 10.5px;
   }
+  /* tab 切换：内容 / 属性 */
+  .detail .dtabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  .detail .dtabs button {
+    flex: 1; height: 24px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
+    color: var(--faint); font-family: inherit; font-size: 10.5px;
+  }
+  .detail .dtabs button.on {
+    background: rgba(124,140,255,.2); border-color: rgba(124,140,255,.45); color: #E9EAF2;
+  }
+  .detail[data-tab="content"] .dform { display: none; }
+  .detail[data-tab="props"] .dcontent { display: none; }
+
+  .dcontent {
+    max-height: 320px; overflow-y: auto; margin-bottom: 4px;
+    font-size: 11.5px; line-height: 1.6; color: var(--text);
+  }
+  .dcontent::-webkit-scrollbar { width: 6px; }
+  .dcontent::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+  .blk { padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+  .blk[data-type="heading_1"] { font-size: 15px; font-weight: 600; margin: 6px 0 3px; }
+  .blk[data-type="heading_2"] { font-size: 13.5px; font-weight: 600; margin: 5px 0 2px; }
+  .blk[data-type="heading_3"] { font-size: 12.5px; font-weight: 600; margin: 4px 0 2px; }
+  .blk[data-type="bulleted_list_item"]::before { content: "•"; margin-right: 6px; color: var(--faint); }
+  .blk[data-type="numbered_list_item"]::before { content: attr(data-index) "."; margin-right: 5px; color: var(--faint); }
+  .blk[data-type="to_do"]::before { content: "☐"; margin-right: 6px; color: var(--faint); }
+  .blk[data-type="to_do"].done::before { content: "☑"; color: #35CE94; }
+  .blk[data-type="to_do"].done { color: var(--faint); text-decoration: line-through; }
+  .blk[data-type="quote"] { border-left: 2px solid rgba(255,255,255,.18); padding-left: 8px; color: var(--dim); }
+  .blk[data-type="code"] {
+    background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 6px; padding: 6px 8px; margin: 3px 0;
+    font-family: ui-monospace, Consolas, monospace; font-size: 10.5px;
+  }
+  .blk[data-type="divider"] { border-top: 1px solid rgba(255,255,255,.14); margin: 7px 0; }
+  .blk[data-type="callout"] { background: rgba(124,140,255,.1); border-radius: 6px; padding: 5px 8px; }
+  .blk[data-type="toggle"]::before { content: "▸"; margin-right: 6px; color: var(--faint); }
+  .dnote { font-size: 9.5px; color: var(--faint); margin-top: 6px; }
+  .dempty { color: var(--faint); font-size: 11px; padding: 14px 0; text-align: center; }
+  .derror { color: #FF9AAE; font-size: 11px; padding: 10px 0; }
+  .derror button {
+    margin-top: 6px; height: 22px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06);
+    color: var(--text); font-family: inherit; font-size: 10px;
+  }
+  .skel { height: 10px; border-radius: 4px; margin: 7px 0;
+          background: linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.13), rgba(255,255,255,.06));
+          background-size: 200% 100%; animation: skel 1.1s linear infinite; }
+  @keyframes skel { from { background-position: 160% 0; } to { background-position: -40% 0; } }
+  body.theme-light .detail .dtabs button.on { background: rgba(124,140,255,.18); color: #1B1C22; }
+  body.theme-light .blk[data-type="code"] { background: rgba(0,0,0,.06); }
+
   .detail .dfoot button.primary {
     background: rgba(124,140,255,.22); border-color: rgba(124,140,255,.45); color: #EDEEF7;
   }
@@ -943,7 +995,13 @@
 
 <div class="dragtip" id="dragtip"></div>
 
-<div class="detail" id="detail">
+<div class="detail" id="detail" data-tab="content">
+  <div class="dtabs" id="dTabs">
+    <button data-tab="content" class="on">内容</button>
+    <button data-tab="props">属性</button>
+  </div>
+  <div class="dcontent" id="dContent"></div>
+  <div class="dform" id="dForm">
   <input class="dtitle" id="dTitle" maxlength="200" placeholder="标题">
   <div class="dseg" id="dStatus">
     <button data-status="todo">未开始</button>
@@ -964,6 +1022,7 @@
   </div>
   <div class="drow"><span class="dlab">大方向</span><select class="dsel" id="dDir"></select></div>
   <div class="drow"><span class="dlab">学科</span><select class="dsel" id="dSubject"></select></div>
+  </div>
   <div class="dfoot">
     <button class="primary" id="dOpen">在 Notion 打开</button>
     <button id="dClose">关闭</button>
@@ -2138,6 +2197,96 @@
     };
   }
 
+  /* ---------- 内容 tab（只读） ---------- */
+  const dContent = document.getElementById("dContent");
+  const dTabs = document.getElementById("dTabs");
+  let contentSeq = 0;
+
+  function setDetailTab(tab) {
+    detail.dataset.tab = tab;
+    dTabs.querySelectorAll("button").forEach(b =>
+      b.classList.toggle("on", b.dataset.tab === tab));
+  }
+
+  function renderBlock(block, numIndex) {
+    const el = document.createElement("div");
+    el.className = "blk" + (block.type === "to_do" && block.checked ? " done" : "");
+    el.dataset.type = block.type;
+    if (block.level > 1) el.style.paddingLeft = ((block.level - 1) * 12) + "px";
+    if (block.type === "numbered_list_item") el.dataset.index = String(numIndex);
+    el.textContent = block.type === "divider" ? "" : (block.text || "");
+    return el;
+  }
+
+  function renderContent(res) {
+    contentSeq += 1;                      // 渲染完成，作废挂起的骨架
+    const blocks = (res && res.blocks) || [];
+    dContent.innerHTML = "";
+    if (!blocks.length) {
+      const empty = document.createElement("div");
+      empty.className = "dempty";
+      empty.textContent = "这一页还没有内容";
+      dContent.appendChild(empty);
+    } else {
+      let num = 0;
+      blocks.forEach(b => {
+        if (b.type === "numbered_list_item") num += 1; else num = 0;
+        dContent.appendChild(renderBlock(b, num || 1));
+      });
+      if (res.truncated) {
+        const tip = document.createElement("div");
+        tip.className = "dnote";
+        tip.textContent = "内容较多，只显示前一部分";
+        dContent.appendChild(tip);
+      }
+    }
+    const note = document.createElement("div");
+    note.className = "dnote";
+    note.textContent = "只读 · 在 Notion 编辑";
+    dContent.appendChild(note);
+  }
+
+  function renderContentError(message) {
+    contentSeq += 1;
+    dContent.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "derror";
+    box.textContent = message || "加载失败";
+    const retry = document.createElement("button");
+    retry.textContent = "重试";
+    retry.addEventListener("click", e => { e.stopPropagation(); loadContent(detailTask); });
+    box.appendChild(document.createElement("br"));
+    box.appendChild(retry);
+    dContent.appendChild(box);
+  }
+
+  async function loadContent(t) {
+    if (!t) return;
+    const seq = ++contentSeq;
+    dContent.innerHTML = '<div class="skel"></div>'.repeat(4);
+    const api = bridge();
+    if (!api || !api.get_page_content) {
+      if (seq === contentSeq) renderContentError("浏览器预览无法读取内容");
+      return;
+    }
+    let res = null;
+    try {
+      res = await api.get_page_content(t.id);
+    } catch (err) {
+      res = { ok: false, error: String(err) };
+    }
+    if (seq !== contentSeq) return;        // 期间换了任务或已重载
+    if (!res || !res.ok) { renderContentError(res && res.error); return; }
+    renderContent(res);
+  }
+
+  dTabs.addEventListener("click", e => {
+    const btn = e.target.closest("button[data-tab]");
+    if (!btn) return;
+    e.stopPropagation();
+    setDetailTab(btn.dataset.tab);
+  });
+
   function placeDetail(el) {
     detail.classList.add("open");            // 先显示才能量尺寸
     const r = el.getBoundingClientRect();
@@ -2173,6 +2322,8 @@
     fillSelect(dSubject, taskOptions("学科"), t.subject);
     detailBusy = false;
     detailSaved = readDetail();
+    setDetailTab("content");     // 每次打开都从内容页开始
+    loadContent(t);
     placeDetail(el);
   }
 

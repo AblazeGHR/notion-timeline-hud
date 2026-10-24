@@ -440,6 +440,18 @@ class NotionClient:
             if not cursor:
                 return tasks
 
+    def get_block_children(
+        self,
+        block_id: str,
+        page_size: int = 100,
+        start_cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /v1/blocks/{id}/children，单次最多 100 个。"""
+        params: dict[str, Any] = {"page_size": max(1, min(page_size, 100))}
+        if start_cursor:
+            params["start_cursor"] = start_cursor
+        return self._request("GET", f"/v1/blocks/{block_id}/children", params=params)
+
     def get_data_source(self, data_source_id: str) -> dict[str, Any]:
         """GET /v1/data_sources/{id}：拿属性定义（选项名随库不同，写之前要核对）。"""
         return self._request("GET", f"/v1/data_sources/{data_source_id}")

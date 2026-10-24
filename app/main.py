@@ -271,6 +271,93 @@ def refresh_loop(window: webview.Window, initial_digest: str) -> None:
             print("后台刷新推送失败:", exc, flush=True)
 
 
+# ---------------------------------------------------------------- 页面内容
+
+_BLOCK_TYPES = {
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "to_do",
+    "quote", "code", "divider", "callout", "toggle",
+}
+_PAGE_CACHE_TTL = 60.0
+_page_content_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _plain_text(rich: Any) -> str:
+    parts = []
+    for item in rich or []:
+        if not isinstance(item, dict):
+            continue
+        value = item.get("plain_text")
+        if value is None:
+            value = (item.get("text") or {}).get("content", "")
+        parts.append(str(value))
+    return "".join(parts).strip()
+
+
+def _map_block(raw: dict, level: int) -> dict | None:
+    btype = raw.get("type")
+    if btype not in _BLOCK_TYPES:
+        return None
+    data = raw.get(btype) or {}
+    text = _plain_text(data.get("rich_text"))
+    return {
+        "id": raw.get("id"),
+        "type": btype,
+        "text": text,
+        "checked": bool(data.get("checked")) if btype == "to_do" else False,
+        "lang": str(data.get("language") or "") if btype == "code" else "",
+        "level": level,
+    }
+
+
+def _collect_children(client, block_id: str, level: int, out: list, counter: dict, depth: int) -> None:
+    """递归取子块：最多 2 层、子块总数 ≤ 120。"""
+    if depth > 2 or counter["children"] >= 120:
+        return
+    cursor = None
+    while True:
+        data = client.get_block_children(block_id, 100, cursor)
+        for raw in data.get("results") or []:
+            if counter["children"] >= 120:
+                counter["truncated"] = True
+                return
+            counter["children"] += 1
+            mapped = _map_block(raw, level)
+            if mapped:
+                out.append(mapped)
+            if raw.get("has_children"):
+                _collect_children(client, raw["id"], level + 1, out, counter, depth + 1)
+        if not data.get("has_more"):
+            return
+        cursor = data.get("next_cursor")
+        if not cursor:
+            return
+
+
+def fetch_page_blocks(client, page_id: str, max_top: int = 300) -> tuple[list, bool]:
+    """顶层最多 300 块，子块最多 120 块（2 层）。"""
+    blocks: list = []
+    counter = {"children": 0, "truncated": False}
+    cursor = None
+    while True:
+        data = client.get_block_children(page_id, 100, cursor)
+        for raw in data.get("results") or []:
+            if len(blocks) >= max_top:
+                counter["truncated"] = True
+                break
+            mapped = _map_block(raw, 1)
+            if mapped:
+                blocks.append(mapped)
+            if raw.get("has_children"):
+                _collect_children(client, raw["id"], 2, blocks, counter, 1)
+        if counter["truncated"] or not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return blocks, counter["truncated"]
+
+
 # ---------------------------------------------------------------- 单实例
 
 
@@ -954,6 +1041,28 @@ class Api:
             return {"ok": True, "status": nxt}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
+
+    def get_page_content(self, page_id: str) -> dict:
+        """详情弹窗「内容」页：只读拉取该页的块（60s 内复用）。"""
+        key = str(page_id)
+        cached = _page_content_cache.get(key)
+        if cached and time.time() - cached[0] < _PAGE_CACHE_TTL:
+            payload = dict(cached[1])
+            payload["cached"] = True
+            return payload
+        try:
+            with NotionClient() as client:
+                blocks, truncated = fetch_page_blocks(client, key)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            if "HTTP 404" in message:
+                message = "页面不存在或已被删除"
+            elif "HTTP 403" in message:
+                message = "没有权限访问这一页"
+            return {"ok": False, "blocks": [], "truncated": False, "error": message}
+        payload = {"ok": True, "blocks": blocks, "truncated": truncated, "error": None}
+        _page_content_cache[key] = (time.time(), payload)
+        return dict(payload)
 
     def update_task_fields(self, task_id: str, patch: dict | None = None) -> dict:
         """详情弹窗的自动保存：只提交 patch 里出现的字段。"""
