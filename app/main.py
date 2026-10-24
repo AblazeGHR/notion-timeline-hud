@@ -65,6 +65,15 @@ PIPE_NAME = r"\\.\pipe\TimelineHUD_v1_activate"
 dwmapi = ctypes.windll.dwmapi
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", ctypes.c_ulong),
+    ]
+
+
 class MARGINS(ctypes.Structure):
     _fields_ = [
         ("cLeft", ctypes.c_int),
@@ -424,6 +433,55 @@ def cancel_memory_trim() -> None:
             _trim_timer = None
 
 
+def monitor_rect(point: tuple[int, int] | None = None) -> tuple[int, int, int, int]:
+    """pt 所在显示器的 rcMonitor（物理像素）；point 为空则用鼠标位置。"""
+    pt = wintypes.POINT(0, 0)
+    if point is None:
+        user32.GetCursorPos(ctypes.byref(pt))
+    else:
+        pt.x, pt.y = point
+    hmon = user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(info)
+    if not hmon or not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+        return (0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+    r = info.rcMonitor
+    return (r.left, r.top, r.right, r.bottom)
+
+
+def list_monitors() -> list[str]:
+    """日志用：列出所有显示器（纯 Win32，不依赖 pythonnet）。"""
+    items: list[str] = []
+    proc = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.POINTER(wintypes.RECT), ctypes.c_double,
+    )
+
+    def each(hmon, _hdc, _rect, _data):
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            r = info.rcMonitor
+            tag = "主" if info.dwFlags & 1 else "从"
+            items.append(f"[{tag}] {r.right - r.left}x{r.bottom - r.top} @({r.left},{r.top})")
+        return True
+
+    user32.EnumDisplayMonitors(None, None, proc(each), 0)
+    return items or ["<未枚举到显示器>"]
+
+
+def fit_to_monitor(hwnd: int, point: tuple[int, int] | None = None) -> tuple[int, int, int, int]:
+    """贴到 point（默认鼠标）所在显示器的右缘、整屏高。"""
+    left, top, right, bottom = monitor_rect(point)
+    rect = wintypes.RECT()
+    user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect))
+    width = max(320, rect.right - rect.left)
+    x = max(left, right - width)
+    _set_window_pos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), x, top,
+                    width, bottom - top, SWP_SHOWWINDOW)
+    return x, top, x + width, bottom
+
+
 def fit_to_screen(hwnd: int) -> tuple[int, int, int, int]:
     """按物理像素把窗口钉到右边缘、整屏高。
 
@@ -465,8 +523,14 @@ def reset_timeline_scale(window: webview.Window, *, offload: bool = False) -> No
 
 def show_window(window: webview.Window) -> None:
     cancel_memory_trim()
-    window.show()
     hwnd = state["hwnd"]
+    if hwnd:  # 唤出时按鼠标所在显示器重新定位（多屏）
+        try:
+            left, top, right, bottom = fit_to_monitor(hwnd)
+            print(f"唤出定位 -> ({left},{top},{right},{bottom})", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print("唤出定位失败:", exc, flush=True)
+    window.show()
     if hwnd:
         user32.ShowWindow(hwnd, 5)  # SW_SHOW
         user32.SetForegroundWindow(hwnd)
@@ -992,6 +1056,7 @@ def main() -> None:
             state["hwnd"] = hwnd
             left, top, right, bottom = fit_to_screen(hwnd)
             print(f"fit_to_screen -> ({left},{top},{right},{bottom})", flush=True)
+            print(f"显示器: {list_monitors()}", flush=True)
             ok = apply_acrylic(hwnd) if not args.no_blur else False
             # 顺序要紧：DWM 系统背景必须最后设，否则会被 SetWindowCompositionAttribute 覆盖
             transparency = enable_transparency(hwnd, window.native)
