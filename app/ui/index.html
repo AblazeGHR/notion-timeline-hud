@@ -1332,6 +1332,7 @@
       row.className = "ditem";
       row.innerHTML = '<span class="dot ' + t.status + '"></span><span>' + t.title + '</span>' +
                       '<span class="tag">' + t.tag + '</span>';
+      row.dataset.search = searchableText(t);
       drawerBody.appendChild(row);
     });
   }
@@ -1710,16 +1711,21 @@
     return false;
   }
 
+  /* 搜索的匹配文本：标题 + 大方向 + 学科 + Tag */
+  function searchableText(t) {
+    return [t.title, t.dir, t.subject, t.tag].filter(Boolean).join(" ");
+  }
+
   function applySearch(query) {
     const q = query.trim();
     ["sched", "due"].forEach(key => {
       items[key].forEach(it => {
-        it.el.classList.toggle("hide", !fuzzyHit(q, it.t.title));
+        it.el.classList.toggle("hide", !fuzzyHit(q, searchableText(it.t)));
       });
       layoutLane(key);
     });
     drawerBody.querySelectorAll(".ditem").forEach(row => {
-      row.classList.toggle("hide", !!q && !fuzzyHit(q, row.textContent));
+      row.classList.toggle("hide", !!q && !fuzzyHit(q, row.dataset.search || row.textContent));
     });
     const visible = document.querySelectorAll(
       '.lane[data-track="' + timelineEl.dataset.track + '"] .chip:not(.hide)').length;

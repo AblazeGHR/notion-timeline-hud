@@ -82,7 +82,13 @@ def to_ui(tasks: list[Task]) -> dict[str, Any]:
             item["allDayDue"] = due.start_time is None
 
         if sched is None and due is None:
-            undated.append({"title": task.title, "status": status, "tag": tag})
+            undated.append({
+                "title": task.title,
+                "status": status,
+                "tag": tag,
+                "dir": _prop_text(task, "大方向"),
+                "subject": _prop_text(task, "学科"),
+            })
         else:
             rows.append(item)
 
