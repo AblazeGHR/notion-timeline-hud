@@ -1308,12 +1308,13 @@
     const baseH = el._baseH || el.offsetHeight;
     const baseMin = base / 60000;          // 今天 0 点的绝对分钟，用于换算
     let pointerY = e.clientY;
+    let pointerX = e.clientX;
     const top0 = parseFloat(el.style.top) || item.y;
     const height0 = el.offsetHeight;
     let dragging = false;
     let curStart = startMin0;
     let curEnd = hadEnd ? endMin0 : null;
-    let raf = 0;
+    let stopAuto = null;
 
     document.body.classList.add("drag-lock");
     dragActive = true;
@@ -1352,41 +1353,21 @@
       dragtip.classList.add("on");
     };
 
-    /* 贴边自动滚：2~8px/帧，滚动后重算预览 */
-    const autoStep = () => {
-      raf = 0;
-      if (!dragging) return;
-      const rect = scroll.getBoundingClientRect();
-      let speed = 0;
-      if (pointerY < rect.top + DRAG_EDGE_PX) {
-        const k = Math.min(1, (rect.top + DRAG_EDGE_PX - pointerY) / DRAG_EDGE_PX);
-        speed = -(DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k);
-      } else if (pointerY > rect.bottom - DRAG_EDGE_PX) {
-        const k = Math.min(1, (pointerY - (rect.bottom - DRAG_EDGE_PX)) / DRAG_EDGE_PX);
-        speed = DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k;
-      }
-      if (speed) {
-        const before = scroll.scrollTop;
-        scroll.scrollTop = before + speed;
-        if (scroll.scrollTop !== before) applyPreview(pointerY);
-      }
-      raf = requestAnimationFrame(autoStep);
-    };
-
     const onMove = ev => {
       pointerY = ev.clientY;
+      pointerX = ev.clientX;
       if (!dragging) {
         if (Math.abs(ev.clientY - e.clientY) < 3) return;
         dragging = true;
         el.classList.add("edge-drag");
-        raf = requestAnimationFrame(autoStep);
+        stopAuto = startAutoScroll(() => pointerY, () => applyPreview(pointerY));
       }
       applyPreview(pointerY);
     };
 
     const detach = () => {
       dragActive = false;
-      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (stopAuto) { stopAuto(); stopAuto = null; }
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("keydown", onKey, true);
@@ -1486,6 +1467,47 @@
     return t[ALL_DAY_KEY[key]] ? day + " 全天" : day + " " + hhmm(ts);
   }
 
+  /* 指针 y → 每帧滚动量（px）：越贴边越快，2~8 线性 */
+  function edgeSpeed(pointerY) {
+    const rect = scroll.getBoundingClientRect();
+    if (pointerY < rect.top + DRAG_EDGE_PX) {
+      const k = Math.min(1, (rect.top + DRAG_EDGE_PX - pointerY) / DRAG_EDGE_PX);
+      return -(DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k);
+    }
+    if (pointerY > rect.bottom - DRAG_EDGE_PX) {
+      const k = Math.min(1, (pointerY - (rect.bottom - DRAG_EDGE_PX)) / DRAG_EDGE_PX);
+      return DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k;
+    }
+    return 0;
+  }
+
+  /* 共享的贴边自动滚动；返回 stop()。onStep 在真的滚动了之后调用 */
+  function startAutoScroll(pointerY, onStep) {
+    let raf = 0;
+    const step = () => {
+      raf = 0;
+      const y = pointerY();
+      const speed = y === null || y === undefined ? 0 : edgeSpeed(y);
+      if (speed) {
+        const before = scroll.scrollTop;
+        scroll.scrollTop = before + speed;
+        if (scroll.scrollTop !== before) onStep();
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
+  }
+
+  /* 气泡跟随指针，靠右放不下就翻到左边 */
+  function placeDragTip(x, y) {
+    const w = dragtip.offsetWidth || 72;
+    let left = x + 12;
+    if (left + w > window.innerWidth - 8) left = x - w - 12;
+    dragtip.style.left = Math.max(4, left) + "px";
+    dragtip.style.top = Math.max(4, y - 28) + "px";
+  }
+
   const DRAG_EDGE_PX = 48;      // 进入上下这么多像素开始自动滚
   const DRAG_SPEED_MIN = 2;     // 贴边前的速度 px/帧
   const DRAG_SPEED_MAX = 8;     // 贴边时的速度 px/帧（原来 14，冲得太快）
@@ -1502,7 +1524,7 @@
     let pointerY = e.clientY;
     let dragging = false;
     let targetTs = startTs;
-    let raf = 0;
+    let stopAuto = null;
 
     e.preventDefault();    // 禁掉原生文本选择 / 拖影
     e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动
@@ -1522,30 +1544,7 @@
       dragtip.classList.add("on");
     };
 
-    const placeTip = ev => {
-      dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 120) + "px";
-      dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
-    };
-
-    const autoStep = () => {
-      raf = 0;
-      if (!dragging) return;
-      const rect = scroll.getBoundingClientRect();
-      let speed = 0;
-      if (pointerY < rect.top + DRAG_EDGE_PX) {
-        const k = Math.min(1, (rect.top + DRAG_EDGE_PX - pointerY) / DRAG_EDGE_PX);
-        speed = -(DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k);
-      } else if (pointerY > rect.bottom - DRAG_EDGE_PX) {
-        const k = Math.min(1, (pointerY - (rect.bottom - DRAG_EDGE_PX)) / DRAG_EDGE_PX);
-        speed = DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k;
-      }
-      if (speed) {
-        const before = scroll.scrollTop;
-        scroll.scrollTop = before + speed;
-        if (scroll.scrollTop !== before) updatePreview();
-      }
-      raf = requestAnimationFrame(autoStep);
-    };
+    const placeTip = ev => placeDragTip(ev.clientX, ev.clientY);
 
     const onScroll = () => { if (dragging) updatePreview(); };
 
@@ -1560,7 +1559,7 @@
 
     const detach = () => {
       dragActive = false;
-      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (stopAuto) { stopAuto(); stopAuto = null; }
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
@@ -1583,7 +1582,7 @@
         if (Math.abs(ev.clientY - startClientY) < DRAG_CLICK_PX) return;
         dragging = true;
         el.classList.add("dragging");
-        raf = requestAnimationFrame(autoStep);
+        stopAuto = startAutoScroll(() => pointerY, updatePreview);
       }
       updatePreview();
       placeTip(ev);
@@ -3169,6 +3168,7 @@
     /* 密度/字号调试自测入口 */
     setScale(value) { return applyScale(value); },
     getScale() { return PX_PER_HOUR; },
+    edgeSpeed(y) { return edgeSpeed(y); },
     setFontScale(value) { return applyFontScale(value); },
     getFontScale() { return FONT_SCALE; },
     resetScale() { resetScale(); return PX_PER_HOUR; },
