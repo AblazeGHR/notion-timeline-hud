@@ -196,6 +196,30 @@
     padding: 2px 5px; border-radius: 5px;
   }
 
+  /* ---------------- 搜索 ---------------- */
+  .search {
+    display: none; flex: none; align-items: center; gap: 8px;
+    margin: 0 14px 8px; height: 32px; padding: 0 11px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(124,140,255,.32);
+  }
+  .search.open { display: flex; }
+  .search input {
+    flex: 1; min-width: 0; background: transparent; border: 0; outline: 0;
+    color: var(--text); font-size: 12px; font-family: inherit;
+  }
+  .search input::placeholder { color: var(--faint); }
+  .search .cnt { font-size: 9.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .search kbd {
+    font-family: inherit; font-size: 10px; color: var(--faint);
+    border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.045);
+    padding: 2px 5px; border-radius: 5px;
+  }
+  .chip.hide, .ditem.hide { display: none; }
+  body.theme-light .search { background: rgba(0,0,0,.05); border-color: rgba(124,140,255,.4); }
+  body.theme-light .search input { color: #1B1C22; }
+
   /* ---------------- 时间线 ---------------- */
   .timeline { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 
@@ -729,6 +753,12 @@
     <kbd>↵</kbd>
   </div>
 
+  <div class="search" id="searchBar">
+    <input id="searchInput" placeholder="搜索标题…" autocomplete="off" spellcheck="false">
+    <span class="cnt" id="searchCount"></span>
+    <kbd>Esc</kbd>
+  </div>
+
   <section class="timeline" id="timeline" data-track="sched">
     <div class="gutterbg"></div>
     <div class="trackbar">
@@ -1217,11 +1247,14 @@
 
   function layoutLane(key) {
     lanes[key].querySelectorAll(".tick").forEach(node => node.remove());
-    const list = items[key].filter(it => it.el.isConnected).sort((a, b) => a.y - b.y);
+    // items 保留全部（搜索过滤后还要能恢复），只有可见的参与堆叠
+    const list = items[key].filter(it => it.el.isConnected);
     items[key] = list;
+    const shown = list.filter(it => !it.el.classList.contains("hide"))
+      .sort((a, b) => a.y - b.y);
     let cursor = -Infinity;
 
-    list.forEach(it => {
+    shown.forEach(it => {
       const top = Math.max(it.y, cursor);
       it.el.style.top = top + "px";
       it.el.style.left = "7px";
@@ -1534,6 +1567,60 @@
   }
   document.querySelectorAll(".track").forEach(b =>
     b.addEventListener("click", () => setTrack(b.dataset.track)));
+  /* ---------- 搜索 ---------- */
+  const searchBar = document.getElementById("searchBar");
+  const searchInput = document.getElementById("searchInput");
+  const searchCount = document.getElementById("searchCount");
+
+  /* 子序列即可命中：中文按字符、英文忽略大小写 */
+  function fuzzyHit(query, title) {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const text = String(title || "").toLowerCase();
+    if (text.includes(q)) return true;
+    let i = 0;
+    for (const ch of text) {
+      if (ch === q[i]) i++;
+      if (i === q.length) return true;
+    }
+    return false;
+  }
+
+  function applySearch(query) {
+    const q = query.trim();
+    ["sched", "due"].forEach(key => {
+      items[key].forEach(it => {
+        it.el.classList.toggle("hide", !fuzzyHit(q, it.t.title));
+      });
+      layoutLane(key);
+    });
+    drawerBody.querySelectorAll(".ditem").forEach(row => {
+      row.classList.toggle("hide", !!q && !fuzzyHit(q, row.textContent));
+    });
+    const visible = document.querySelectorAll(
+      '.lane[data-track="' + timelineEl.dataset.track + '"] .chip:not(.hide)').length;
+    searchCount.textContent = q ? visible + " 条" : "";
+    updateCounts();
+  }
+
+  function openSearch() {
+    searchBar.classList.add("open");
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function closeSearch() {
+    searchBar.classList.remove("open");
+    searchInput.value = "";
+    applySearch("");
+  }
+
+  searchInput.addEventListener("input", () => applySearch(searchInput.value));
+  searchInput.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.stopPropagation(); closeSearch(); }
+    if (e.key === "Enter") { e.preventDefault(); searchInput.blur(); }
+  });
+
   /* ---------- 键盘操作 ---------- */
   let selIndex = -1;
 
@@ -1587,6 +1674,7 @@
 
   window.addEventListener("keydown", e => {
     if (e.key === "Escape") {
+      if (searchBar.classList.contains("open")) { closeSearch(); return; }
       closeDetail();
       document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
       selIndex = -1;
@@ -1616,6 +1704,11 @@
     if (e.key === "Delete") {
       e.preventDefault();
       deleteSelected();
+      return;
+    }
+    if (e.key === "/") {
+      e.preventDefault();
+      openSearch();
     }
   });
 
