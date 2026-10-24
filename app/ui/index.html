@@ -888,6 +888,36 @@
   .toast.on { opacity: 1; transform: none; }
   .toast.bad { border-color: rgba(255,107,138,.4); color: #FFC9D2; }
 
+  /* ---------------- 面板内确认弹窗 ---------------- */
+  .modal {
+    position: fixed; inset: 0; z-index: 95; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,.42);
+  }
+  .modal.open { display: flex; }
+  .mbox {
+    width: 300px; max-width: calc(100% - 32px);
+    padding: 14px 14px 12px; border-radius: 12px;
+    background: rgba(26,27,34,.985);
+    border: 1px solid rgba(255,255,255,.13);
+    box-shadow: 0 28px 60px -18px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  .mtitle { font-size: 12.5px; color: #EDEEF5; letter-spacing: .02em; }
+  .mtext { margin-top: 6px; font-size: 11px; line-height: 1.55; color: #A9ABB9; word-break: break-word; }
+  .mfoot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 13px; }
+  .mfoot button {
+    height: 25px; padding: 0 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.13); background: rgba(255,255,255,.05);
+    color: var(--text); font-family: inherit; font-size: 11px;
+  }
+  .mfoot button:hover { background: rgba(255,255,255,.1); }
+  .mfoot button.primary {
+    background: rgba(124,140,255,.26); border-color: rgba(124,140,255,.5); color: #F0F1F8;
+  }
+  .mfoot button.danger {
+    background: rgba(255,107,138,.2); border-color: rgba(255,107,138,.45); color: #FFD2DA;
+  }
+
   /* 桌面壳模式：窗口本身就是面板，不画假桌面 */
   html:has(body.desktop) { background: transparent; }   /* 否则 html 的 #08090D 会挡住亚克力 */
   body.desktop { background: transparent; }
@@ -1057,6 +1087,17 @@
 <div class="dragtip" id="dragtip"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<div class="modal" id="modal">
+  <div class="mbox" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="mtitle" id="mTitle">确认操作</div>
+    <div class="mtext" id="mText"></div>
+    <div class="mfoot">
+      <button id="mCancel">取消</button>
+      <button id="mOk" class="danger">确定</button>
+    </div>
+  </div>
+</div>
+
 <div class="detail" id="detail" data-tab="content">
   <div class="dtabs" id="dTabs">
     <button data-tab="content" class="on">内容</button>
@@ -1149,6 +1190,50 @@
     if (!api) return null;
     return api.set_config(clampPatch(patch));
   }
+
+  /* 面板内确认弹窗：无边框窗口贴屏幕右缘，系统 confirm 会跑到屏外，不能再用 */
+  const modalEl = document.getElementById("modal");
+  const mTitle = document.getElementById("mTitle");
+  const mText = document.getElementById("mText");
+  const mOk = document.getElementById("mOk");
+  const mCancel = document.getElementById("mCancel");
+  let modalResolve = null;
+
+  function askConfirm(opts) {
+    const cfg = typeof opts === "string" ? { text: opts } : (opts || {});
+    return new Promise(resolve => {
+      if (modalResolve) { modalResolve(false); modalResolve = null; }
+      modalResolve = resolve;
+      mTitle.textContent = cfg.title || "确认操作";
+      mText.textContent = cfg.text || "";
+      mOk.textContent = cfg.okText || "确定";
+      mOk.classList.toggle("primary", !cfg.danger);
+      mOk.classList.toggle("danger", !!cfg.danger);
+      modalEl.classList.add("open");
+      mCancel.focus();
+    });
+  }
+
+  function closeModal(result) {
+    if (!modalEl.classList.contains("open")) return;
+    modalEl.classList.remove("open");
+    const resolve = modalResolve;
+    modalResolve = null;
+    if (resolve) resolve(result);
+  }
+
+  mOk.addEventListener("click", e => { e.stopPropagation(); closeModal(true); });
+  mCancel.addEventListener("click", e => { e.stopPropagation(); closeModal(false); });
+  modalEl.addEventListener("click", e => {
+    e.stopPropagation();
+    if (e.target === modalEl) closeModal(false);        // 点遮罩算取消
+  });
+  window.addEventListener("keydown", e => {
+    if (!modalEl.classList.contains("open")) return;
+    e.stopPropagation();
+    if (e.key === "Escape") { e.preventDefault(); closeModal(false); }
+    else if (e.key === "Enter") { e.preventDefault(); closeModal(true); }
+  }, true);
 
   const NOW = new Date();
   const H = 3600000;
@@ -2265,9 +2350,14 @@
     }
   });
 
-  document.getElementById("btnQuit").addEventListener("click", e => {
+  document.getElementById("btnQuit").addEventListener("click", async e => {
     e.stopPropagation();
-    if (!confirm("退出 Timeline HUD？任务不会受影响。")) return;
+    const okQuit = await askConfirm({
+      title: "退出 Timeline HUD？",
+      text: "任务数据不会受影响，下次启动照常读取。",
+      okText: "退出", danger: true,
+    });
+    if (!okQuit) return;
     const api = bridge();
     if (api) api.quit();
   });
@@ -2656,7 +2746,12 @@
     const item = selectedItem();
     if (!item || !item.el.isConnected) return;
     const t = item.t;
-    if (!confirm("删除「" + t.title + "」？会移入 Notion 回收站。")) return;
+    const okDelete = await askConfirm({
+      title: "删除任务？",
+      text: "「" + t.title + "」会移入 Notion 回收站，30 天内可恢复。",
+      okText: "删除", danger: true,
+    });
+    if (!okDelete) return;
     const api = bridge();
     if (!api) return;
     const res = await api.delete_task(t.id);
@@ -2936,7 +3031,11 @@
   }
 
   async function removeBlock(el, block) {
-    if (!confirm("删除这一块？会移入 Notion 回收站。")) return;
+    if (!await askConfirm({
+      title: "删除这一块？",
+      text: "会移入 Notion 回收站，30 天内可恢复。",
+      okText: "删除", danger: true,
+    })) return;
     el.classList.add("saving");
     const api = bridge();
     const res = api ? await api.delete_block(block.id) : { ok: false, error: "预览模式" };
@@ -3392,7 +3491,12 @@
         window.__hud.setStatus(task.id, res.status);
       }
     } else if (act === "del") {
-      if (!confirm("删除「" + task.title + "」？会移入 Notion 回收站。")) return;
+      const okDelete = await askConfirm({
+        title: "删除任务？",
+        text: "「" + task.title + "」会移入 Notion 回收站，30 天内可恢复。",
+        okText: "删除", danger: true,
+      });
+      if (!okDelete) return;
       const res = await window.pywebview.api.delete_task(task.id);
       if (res && res.ok) window.__hud.remove(task.id);
       else toast("删除失败：" + ((res && res.error) || "未知错误"));
