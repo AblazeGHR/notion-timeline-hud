@@ -169,6 +169,8 @@
   .iconbtn:hover { background: rgba(255,255,255,.08); color: var(--text); }
   .iconbtn svg { width: 15px; height: 15px; stroke: currentColor; fill: none;
                  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .iconbtn.spinning svg { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---------------- 快速新增 ---------------- */
   .quickadd {
@@ -953,18 +955,22 @@
   const tasks = (window.__DATA__ && window.__DATA__.tasks) || MOCK_TASKS;
 
   /* 按真实数据扩展时间范围：往前至少 2 天，往后覆盖最远截止日 + 1 天 */
-  (() => {
+  function computeRange() {
     const hours = [];
     tasks.forEach(t => {
       if (typeof t.sched === "number") hours.push(t.sched);
       if (typeof t.due === "number") hours.push(t.due);
     });
+    START_DAY = -2;
+    DAYS = 8;
+    canvasStart = base + START_DAY * DAY;
     if (!hours.length) return;
     START_DAY = Math.min(-2, Math.floor(Math.min(...hours) / 24) - 1);
     const endDay = Math.max(5, Math.ceil(Math.max(...hours) / 24) + 1);
     DAYS = endDay - START_DAY + 1;
     canvasStart = base + START_DAY * DAY;
-  })();
+  }
+  computeRange();
 
   const pad = n => String(n).padStart(2, "0");
   const hhmm = ts => { const d = new Date(ts); return pad(d.getHours()) + ":" + pad(d.getMinutes()); };
@@ -981,7 +987,10 @@
 
   const dayMarks = [];   // 缩放时按 index 重算 top
 
-  for (let i = 0; i < DAYS; i++) {
+  function rebuildDayMarks() {
+    canvas.querySelectorAll(".dayline, .daylabel").forEach(node => node.remove());
+    dayMarks.length = 0;
+    for (let i = 0; i < DAYS; i++) {
     const ts = canvasStart + i * DAY;
     const d = new Date(ts);
     const y = i * 24 * PX_PER_HOUR;
@@ -1001,7 +1010,9 @@
       (isToday ? '<span class="today-pill">今天</span>' : "");
     canvas.appendChild(label);
     dayMarks.push({ index: i, line, label });
+    }
   }
+  rebuildDayMarks();
 
   const lanes = {
     sched: Object.assign(document.createElement("div"), { className: "lane" }),
@@ -1282,35 +1293,23 @@
 
   const drawer = document.getElementById("drawer");
   const drawerBody = document.getElementById("drawerBody");
-  document.getElementById("undatedCount").textContent = undated.length;
-  undated.forEach(t => {
-    const row = document.createElement("div");
-    row.className = "ditem";
-    row.innerHTML = '<span class="dot ' + t.status + '"></span><span>' + t.title + '</span>' +
-                    '<span class="tag">' + t.tag + '</span>';
-    drawerBody.appendChild(row);
-  });
+  function renderDrawer() {
+    document.getElementById("undatedCount").textContent = undated.length;
+    drawerBody.innerHTML = "";
+    undated.forEach(t => {
+      const row = document.createElement("div");
+      row.className = "ditem";
+      row.innerHTML = '<span class="dot ' + t.status + '"></span><span>' + t.title + '</span>' +
+                      '<span class="tag">' + t.tag + '</span>';
+      drawerBody.appendChild(row);
+    });
+  }
+  renderDrawer();
   document.getElementById("drawerHead").addEventListener("click", () => drawer.classList.toggle("open"));
 
-  const todayStart = base, todayEnd = base + DAY;
-  let todayCount = 0, overdueCount = 0;
   let earliestOverdue = null;
-  tasks.forEach(t => {
-    if (t.status === "done") return;
-    const stamps = [t.sched, t.due].filter(v => typeof v === "number").map(v => base + v * H);
-    if (stamps.some(ts => ts >= todayStart && ts < todayEnd)) todayCount++;
-    if (typeof t.due === "number" && base + t.due * H < nowTs) {
-      overdueCount++;
-      if (!earliestOverdue || t.due < earliestOverdue.due) earliestOverdue = t;
-    }
-  });
-  document.getElementById("summary").innerHTML =
-    "今天 <b>" + todayCount + "</b> 项 · 逾期 " +
-    '<b class="warn' + (earliestOverdue ? " clickable" : "") + '" id="overduePill"' +
-    (earliestOverdue ? ' role="button" tabindex="0" title="跳到最早逾期的一项"' : "") +
-    ">" + overdueCount + "</b> 项";
+  const overduePillEl = document.getElementById("summary");
 
-  /* 点逾期胶囊：切到截止轨 + 滚到最早那条并闪一下 */
   function jumpToEarliestOverdue() {
     if (!earliestOverdue) return;
     setTrack("due");
@@ -1322,11 +1321,56 @@
     el.classList.add("sel", "flash");
     setTimeout(() => el.classList.remove("flash"), 1400);
   }
-  const overduePill = document.getElementById("overduePill");
-  overduePill.addEventListener("click", e => { e.stopPropagation(); jumpToEarliestOverdue(); });
-  overduePill.addEventListener("keydown", e => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jumpToEarliestOverdue(); }
-  });
+
+  function renderSummary() {
+    const todayStart = base, todayEnd = base + DAY;
+    let todayCount = 0, overdueCount = 0;
+    earliestOverdue = null;
+    tasks.forEach(t => {
+      if (t.status === "done") return;
+      const stamps = [t.sched, t.due].filter(v => typeof v === "number").map(v => base + v * H);
+      if (stamps.some(ts => ts >= todayStart && ts < todayEnd)) todayCount++;
+      if (typeof t.due === "number" && base + t.due * H < nowTs) {
+        overdueCount++;
+        if (!earliestOverdue || t.due < earliestOverdue.due) earliestOverdue = t;
+      }
+    });
+    overduePillEl.innerHTML =
+      "今天 <b>" + todayCount + "</b> 项 · 逾期 " +
+      '<b class="warn' + (earliestOverdue ? " clickable" : "") + '" id="overduePill"' +
+      (earliestOverdue ? ' role="button" tabindex="0" title="跳到最早逾期的一项"' : "") +
+      ">" + overdueCount + "</b> 项";
+    const pill = document.getElementById("overduePill");
+    pill.onclick = e => { e.stopPropagation(); jumpToEarliestOverdue(); };
+    pill.onkeydown = e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jumpToEarliestOverdue(); }
+    };
+  }
+  renderSummary();
+
+  /* 用当前 tasks/undated 整体重画（刷新数据后调用） */
+  function renderTimeline() {
+    computeRange();
+    canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
+    rebuildDayMarks();
+    ["sched", "due"].forEach(key => {
+      items[key].length = 0;
+      lanes[key].innerHTML = "";
+    });
+    tasks.forEach(t => {
+      ["sched", "due"].forEach(key => {
+        const item = mountChip(t, key);
+        if (item) items[key].push(item);
+      });
+    });
+    layoutLane("sched");
+    layoutLane("due");
+    updateCounts();
+    renderSummary();
+    renderDrawer();
+    const bar = document.getElementById("searchBar");
+    if (bar && bar.classList.contains("open")) applySearch(searchInput.value);
+  }
 
   function scrollToNow(animate) {
     const target = yOf(nowTs) - scroll.clientHeight / 2;
@@ -1334,7 +1378,29 @@
   }
   requestAnimationFrame(() => scrollToNow(false));
   window.addEventListener("resize", () => scrollToNow(false));
-  document.getElementById("btnRefresh").addEventListener("click", () => scrollToNow(true));
+  document.getElementById("btnRefresh").addEventListener("click", async () => {
+    const btn = document.getElementById("btnRefresh");
+    const api = bridge();
+    if (!api || !api.reload_data) { scrollToNow(true); return; }
+    btn.classList.add("spinning");
+    try {
+      const res = await api.reload_data();
+      if (res && res.data) {
+        tasks.length = 0;
+        tasks.push(...(res.data.tasks || []));
+        undated.length = 0;
+        undated.push(...(res.data.undated || []));
+        if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
+        renderTimeline();
+        scrollToNow(true);
+        if (res.error) console.warn("刷新回落：", res.error);
+      } else {
+        alert("刷新失败：" + ((res && res.error) || "未知错误"));
+      }
+    } finally {
+      btn.classList.remove("spinning");
+    }
+  });
 
   /* ---------- 字号缩放 ---------- */
   function updateFontLabel() {
