@@ -1214,9 +1214,11 @@ class Api:
         _page_content_cache.clear()
         return {"ok": True}
 
-    def get_page_content(self, page_id: str) -> dict:
-        """详情弹窗「内容」页：只读拉取该页的块（60s 内复用）。"""
+    def get_page_content(self, page_id: str, refresh: bool = False) -> dict:
+        """详情弹窗「内容」页：只读拉取该页的块（60s 内复用；refresh=True 强制重拉）。"""
         key = str(page_id)
+        if refresh:
+            _page_content_cache.pop(key, None)
         cached = _page_content_cache.get(key)
         if cached and time.time() - cached[0] < _PAGE_CACHE_TTL:
             payload = dict(cached[1])

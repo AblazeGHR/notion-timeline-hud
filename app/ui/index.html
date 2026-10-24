@@ -810,6 +810,10 @@
     border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
     color: var(--faint); font-family: inherit; font-size: 10.5px;
   }
+  .detail .dtabs .drefresh {
+    flex: none; width: 26px; font-size: 12px; line-height: 1;
+  }
+  .detail[data-tab="props"] .drefresh { display: none; }
   .detail .dtabs button.on {
     background: rgba(124,140,255,.2); border-color: rgba(124,140,255,.45); color: #E9EAF2;
   }
@@ -1061,6 +1065,7 @@
   <div class="dtabs" id="dTabs">
     <button data-tab="content" class="on">内容</button>
     <button data-tab="props">属性</button>
+    <button class="drefresh" id="dRefresh" title="刷新内容">↻</button>
   </div>
   <div class="dcontent" id="dContent"></div>
   <div class="dform" id="dForm">
@@ -2838,9 +2843,11 @@
     dContent.appendChild(box);
   }
 
-  async function loadContent(t) {
+  async function loadContent(t, opts = {}) {
     if (!t) return;
     const seq = ++contentSeq;
+    const snapshot = dContent.innerHTML;              // 失败时恢复用
+    const hadContent = !!dContent.querySelector(".blk, .dempty");
     dContent.innerHTML = '<div class="skel"></div>'.repeat(4);
     const api = bridge();
     if (!api || !api.get_page_content) {
@@ -2849,16 +2856,30 @@
     }
     let res = null;
     try {
-      res = await api.get_page_content(t.id);
+      res = await api.get_page_content(t.id, opts.refresh === true);
     } catch (err) {
       res = { ok: false, error: String(err) };
     }
     if (seq !== contentSeq) return;        // 期间换了任务或已重载
-    if (!res || !res.ok) { renderContentError(res && res.error); return; }
+    if (!res || !res.ok) {
+      const message = (res && res.error) || "未知错误";
+      if (hadContent) {
+        dContent.innerHTML = snapshot;               // 失败保留旧内容
+        alert("刷新失败：" + message);
+      } else {
+        renderContentError(message);
+      }
+      return;
+    }
     renderContent(res);
   }
 
   dTabs.addEventListener("click", e => {
+    if (e.target.closest("#dRefresh")) {
+      e.stopPropagation();
+      if (detailTask) loadContent(detailTask, { refresh: true });
+      return;
+    }
     const btn = e.target.closest("button[data-tab]");
     if (!btn) return;
     e.stopPropagation();
