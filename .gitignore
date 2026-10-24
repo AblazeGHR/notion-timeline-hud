@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+app/config.json
+.playwright-mcp/
+spike/static.html
+spike/*.png
+*.log
