@@ -681,6 +681,18 @@
   .quitbtn:hover { background: rgba(255,107,138,.24); }
   body.theme-light .quit-row { background: rgba(252,252,254,.99); border-top-color: rgba(0,0,0,.09); }
   body.theme-light .quitbtn { color: #C4384F; }
+  .hotkey-row { cursor: pointer; }
+  .hotkey-row:hover .keys kbd { border-color: rgba(124,140,255,.5); color: #DCE0FF; }
+  .hotkey-row .capture-text {
+    display: none; font-size: 10px; color: #AEB6FF;
+  }
+  .hotkey-row.capturing .keys { opacity: .35; }
+  .hotkey-row.capturing .capture-text { display: inline; }
+  .srow-hint {
+    display: none; margin: -2px 0 6px; font-size: 9.5px; color: #FF9AAE;
+  }
+  .srow-hint.on { display: block; }
+
   .sfoot { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.055);
            font-size: 9.5px; color: var(--faint); display: flex; justify-content: space-between; }
   .drawer-head .sync {
@@ -1008,10 +1020,12 @@
 
   <div class="settings" id="settings">
     <h4>设置</h4>
-    <div class="srow">
+    <div class="srow hotkey-row" id="hotkeyRow" title="点击修改快捷键">
       <span>唤出快捷键</span>
       <span class="keys" id="hotkeyKeys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd></span>
+      <span class="capture-text" id="hotkeyCapture">按下新组合键…</span>
     </div>
+    <div class="srow-hint" id="hotkeyHint"></div>
     <div class="srow">
       <span>面板透明度</span>
       <span class="density">
@@ -2058,6 +2072,92 @@
     }, 300);
   });
 
+  /* ---------- 快捷键编辑 ---------- */
+  const hotkeyRow = document.getElementById("hotkeyRow");
+  const hotkeyCapture = document.getElementById("hotkeyCapture");
+  const hotkeyHint = document.getElementById("hotkeyHint");
+  let capturing = false;
+
+  function hotkeyName(ev) {
+    const k = ev.key;
+    if (k === " ") return "Space";
+    const named = {
+      Escape: "Esc", Enter: "Enter", Tab: "Tab", Backspace: "Backspace", Delete: "Delete",
+      Insert: "Insert", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+      ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down"
+    };
+    if (named[k]) return named[k];
+    if (/^[a-zA-Z]$/.test(k)) return k.toUpperCase();
+    if (/^[0-9]$/.test(k)) return k;
+    if (/^F([1-9]|1[0-2])$/.test(k)) return k;
+    if (["`", "-", "="].includes(k)) return k;
+    return null;
+  }
+
+  function showHotkeyHint(text) {
+    hotkeyHint.textContent = text || "";
+    hotkeyHint.classList.toggle("on", !!text);
+  }
+
+  function renderHotkey(text) {
+    hotkeyKeys.innerHTML = String(text || "")
+      .split("+").filter(Boolean)
+      .map(k => "<kbd>" + k.trim() + "</kbd>").join("");
+  }
+
+  function stopCapture() {
+    capturing = false;
+    hotkeyRow.classList.remove("capturing");
+    window.removeEventListener("keydown", onCaptureKey, true);
+  }
+
+  function startCapture() {
+    if (capturing) return;
+    capturing = true;
+    showHotkeyHint("");
+    hotkeyRow.classList.add("capturing");
+    window.addEventListener("keydown", onCaptureKey, true);
+  }
+
+  async function onCaptureKey(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();          // 捕获期间不触发全局 Esc / Delete 等
+    if (!capturing) return;
+
+    if (ev.key === "Escape") { stopCapture(); return; }
+    if (["Shift", "Control", "Alt", "Meta"].includes(ev.key)) return;   // 只按修饰键不算
+
+    const key = hotkeyName(ev);
+    if (!key) { showHotkeyHint("这个键不支持，换一个（字母/数字/F1-F12/空格等）"); return; }
+
+    const parts = [];
+    if (ev.ctrlKey) parts.push("Ctrl");
+    if (ev.altKey) parts.push("Alt");
+    if (ev.shiftKey) parts.push("Shift");
+    if (ev.metaKey) parts.push("Win");
+    if (!parts.length) { showHotkeyHint("至少带一个修饰键（Ctrl / Alt / Shift / Win）"); return; }
+
+    const combo = parts.concat([key]).join("+");
+    const previous = hotkeyRow.dataset.saved || "";
+    const api = bridge();
+    stopCapture();
+    if (!api) { showHotkeyHint("浏览器预览不能改快捷键"); return; }
+    const res = await api.set_config({ hotkey: combo });
+    if (res && res.ok) {
+      hotkeyRow.dataset.saved = combo;
+      renderHotkey(combo);
+      showHotkeyHint("");
+    } else {
+      renderHotkey(previous);
+      showHotkeyHint("没改成：" + ((res && res.error) || "未知错误"));
+    }
+  }
+
+  hotkeyRow.addEventListener("click", e => {
+    e.stopPropagation();
+    startCapture();
+  });
+
   themeSeg.querySelectorAll("button").forEach(btn => {
     btn.addEventListener("click", async () => {
       const previous = themeSeg.querySelector("button.on");
@@ -2175,9 +2275,8 @@
     swOpenInApp.classList.toggle("on", cfg.open_in_app !== false);
     swHideBlur.classList.toggle("on", cfg.hide_on_blur === true);
     swRelease.classList.toggle("on", Number(cfg.release_memory_minutes) > 0);
-    hotkeyKeys.innerHTML = String(cfg.hotkey || "")
-      .split("+").filter(Boolean)
-      .map(k => "<kbd>" + k.trim() + "</kbd>").join("");
+    renderHotkey(cfg.hotkey);
+    hotkeyRow.dataset.saved = String(cfg.hotkey || "");
     if (cfg.timeline_scale != null) {
       DEFAULT_SCALE = clampScale(cfg.timeline_scale);
       applyScale(DEFAULT_SCALE);
