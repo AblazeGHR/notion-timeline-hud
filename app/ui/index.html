@@ -1348,8 +1348,7 @@
       }
       const tipMin = side === "start" ? curStart : curEnd;
       dragtip.textContent = hhmm(base + tipMin * 60000);
-      dragtip.style.left = Math.min(window.innerWidth - 90, 240) + "px";
-      dragtip.style.top = Math.max(4, y - 28) + "px";
+      placeDragTip(pointerX, y);
       dragtip.classList.add("on");
     };
 
