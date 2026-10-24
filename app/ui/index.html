@@ -882,6 +882,21 @@
       layoutLane(key);
     };
 
+    const detach = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("blur", onCancel);
+      document.body.classList.remove("drag-lock");
+      dragtip.classList.remove("on");
+      el.classList.remove("dragging");
+    };
+
+    /* 拖到窗口外/切走焦点，收不到 mouseup：取消并归位，别卡在拖拽态 */
+    const onCancel = () => {
+      detach();
+      restore();
+    };
+
     const onMove = ev => {
       dy = ev.clientY - startY;
       if (!dragging) {
@@ -897,11 +912,7 @@
     };
 
     const onUp = async () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.classList.remove("drag-lock");
-      dragtip.classList.remove("on");
-      el.classList.remove("dragging");
+      detach();
       if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
       el._dragEndedAt = Date.now();
 
@@ -936,6 +947,7 @@
 
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("blur", onCancel);
   }
 
   function mountChip(t, key) {
