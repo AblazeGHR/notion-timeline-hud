@@ -586,19 +586,29 @@ def hotkey_loop(window: webview.Window, mods: int, vk: int, label: str) -> None:
             break
 
 
-def blur_watch(window: webview.Window) -> None:
-    """失焦 700ms 后自动收起；刚唤出的 1.2 秒内不判定，避免误收。"""
+def foreground_root() -> int:
+    """当前前台窗口的顶层句柄（测试可替换）。"""
+    fg = user32.GetForegroundWindow()
+    return user32.GetAncestor(fg, GA_ROOT) if fg else 0
+
+
+def blur_watch(window: webview.Window, stop: threading.Event | None = None) -> None:
+    """失焦 700ms 后自动收起；hide_on_blur 关闭时完全不介入。
+
+    stop 只给测试用（正常运行时线程跟随进程退出）。
+    """
     while True:
+        if stop is not None and stop.is_set():
+            return
         time.sleep(0.25)
         if not state["visible"] or not state["hwnd"]:
             continue
-        if not state["config"].get("hide_on_blur", True):
+        if not state["config"].get("hide_on_blur", False):
             state["armed"] = False
             continue
         if time.time() - state["shown_at"] < 1.2:
             continue
-        fg = user32.GetForegroundWindow()
-        root = user32.GetAncestor(fg, GA_ROOT) if fg else 0
+        root = foreground_root()
         if root == state["hwnd"]:
             state["armed"] = True
             continue

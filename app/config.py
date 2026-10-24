@@ -21,7 +21,7 @@ DEFAULTS: dict[str, Any] = {
     "font_scale": 1.0,
     "open_in_app": True,
     "theme": "dark",
-    "hide_on_blur": True,
+    "hide_on_blur": False,
     "release_memory_minutes": 15,
     "refresh_seconds": 120,
     "autostart": False,
