@@ -408,6 +408,22 @@
     max-width: 62px; overflow: hidden; text-overflow: ellipsis;
   }
   .chip .late { color: #FF8FA3; letter-spacing: .01em; }
+  .chip.sized { overflow: hidden; }
+  .chip .hedge {
+    position: absolute; left: 0; right: 0; height: 6px; z-index: 3; cursor: ns-resize;
+  }
+  .chip .hedge.top { top: -1px; right: 22px; }     /* 右上角留给 ↗ */
+  .chip .hedge.bottom { bottom: -1px; }
+  .chip .hedge:hover { background: rgba(124,140,255,.5); }
+  .chip .hedge::after {
+    content: ""; position: absolute; left: 6px; right: 6px; height: 1px;
+    background: transparent; transition: background .12s;
+  }
+  .chip .hedge.top::after { top: 0; }
+  .chip .hedge.bottom::after { bottom: 0; }
+  .chip .hedge:hover::after { background: rgba(190,200,255,.95); }
+  .chip.allday .hedge { display: none; }
+  .chip.edge-drag { box-shadow: 0 0 0 1px rgba(124,140,255,.7); }
   /* 外链按钮：绝对定位，不参与文字排版（hover 才出现） */
   .chip .link {
     position: absolute; right: 3px; top: 3px;
@@ -1220,7 +1236,150 @@
 
   const items = { sched: [], due: [] };
 
-  function chipHtml(t, ts, late, allDay) {
+  /* 时间行文案：有时间段就显示 15:00–16:30 */
+  function chipTimeText(t, key) {
+    if (t[ALL_DAY_KEY[key]]) return "全天";
+    const startText = hhmm(base + t[key] * H);
+    const end = t[END_KEY[key]];
+    if (typeof end === "number" && end > t[key]) {
+      return startText + "–" + hhmm(base + end * H);
+    }
+    return startText;
+  }
+
+  /* 时间段卡片按真实时长定高；没有结束就保持内容高度 */
+  function applyChipSpanHeight(item) {
+    const el = item.el;
+    const t = item.t;
+    const key = item.key;
+    el.style.height = "";
+    el.classList.remove("sized");
+    const baseH = el.offsetHeight;
+    if (!el._baseH) el._baseH = baseH;
+    const allDay = !!t[ALL_DAY_KEY[key]];
+    const end = t[END_KEY[key]];
+    let h = baseH;
+    if (!allDay && typeof end === "number" && end > t[key]) {
+      h = Math.max(baseH, (end - t[key]) * 60 * PX_PER_MIN);
+      el.style.height = h + "px";
+      el.classList.add("sized");
+    }
+    item.h = h;
+    return h;
+  }
+
+  /* 上下沿拖动：上沿改 start（end 固定），下沿改 end（start 固定） */
+  function startEdgeDrag(e, el, t, key, side) {
+    if (t[ALL_DAY_KEY[key]]) return;
+    const item = items[key].find(it => it.el === el);
+    if (!item) return;
+
+    const hadEnd = typeof t[END_KEY[key]] === "number" && t[END_KEY[key]] > t[key];
+    const startMin0 = Math.round(t[key] * 60);
+    const endMin0 = hadEnd ? Math.round(t[END_KEY[key]] * 60) : startMin0 + 30;
+    const baseH = el._baseH || el.offsetHeight;
+    const startY = e.clientY;
+    const top0 = parseFloat(el.style.top) || item.y;
+    const height0 = el.offsetHeight;
+    let dragging = false;
+    let curStart = startMin0;
+    let curEnd = hadEnd ? endMin0 : null;
+
+    document.body.classList.add("drag-lock");
+    dragActive = true;
+
+    const pointOf = min => {
+      const d = new Date(base + min * 60000);
+      return {
+        date: d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()),
+        time: pad(d.getHours()) + ":" + pad(d.getMinutes())
+      };
+    };
+
+    const restore = () => {
+      el.style.top = top0 + "px";
+      el.style.height = height0 + "px";
+      layoutLane(key);
+    };
+
+    const onMove = ev => {
+      const dy = ev.clientY - startY;
+      if (!dragging) {
+        if (Math.abs(dy) < 3) return;
+        dragging = true;
+        el.classList.add("edge-drag");
+      }
+      const delta = Math.round((dy / PX_PER_MIN) / 15) * 15;
+      if (side === "start") {
+        curStart = hadEnd ? Math.min(startMin0 + delta, endMin0 - 15) : startMin0 + delta;
+        el.style.top = yOf(base + curStart * 60000) + "px";
+        if (hadEnd) {
+          el.style.height = Math.max(baseH, (endMin0 - curStart) * PX_PER_MIN) + "px";
+        }
+      } else {
+        curEnd = Math.max(endMin0 + delta, startMin0 + 15);
+        el.style.height = Math.max(baseH, (curEnd - startMin0) * PX_PER_MIN) + "px";
+      }
+      const tipMin = side === "start" ? curStart : curEnd;
+      dragtip.textContent = hhmm(base + tipMin * 60000);
+      dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 90) + "px";
+      dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
+      dragtip.classList.add("on");
+    };
+
+    const detach = () => {
+      dragActive = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey, true);
+      document.body.classList.remove("drag-lock");
+      dragtip.classList.remove("on");
+      el.classList.remove("edge-drag");
+    };
+
+    const onKey = ev => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      detach();
+      restore();
+    };
+
+    const onUp = async () => {
+      detach();
+      if (!dragging) return;
+      el._dragEndedAt = Date.now();
+      if (curStart === startMin0 && (curEnd === null ? endMin0 : curEnd) === endMin0) {
+        restore();
+        return;
+      }
+      const api = bridge();
+      if (!api) { restore(); return; }
+      el.style.opacity = ".7";
+      const res = await api.resize_task(
+        t.id, TRACK_PROP[key], pointOf(curStart), curEnd === null ? null : pointOf(curEnd));
+      el.style.opacity = "";
+      if (res && res.ok) {
+        t[key] = curStart / 60;
+        t[END_KEY[key]] = curEnd === null ? null : curEnd / 60;
+        item.y = yOf(base + t[key] * H);
+        const timeSpan = el.querySelector(".row2 span");
+        if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+        applyChipSpanHeight(item);
+      } else {
+        restore();
+        alert("调整失败：" + ((res && res.error) || "未知错误"));
+      }
+      layoutLane(key);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey, true);
+  }
+
+  function chipHtml(t, key, ts, late) {
+    const allDay = !!t[ALL_DAY_KEY[key]];
     const lateText = late
       ? (nowTs - ts >= DAY ? "逾期 " + Math.ceil((nowTs - ts) / DAY) + "d"
                            : "逾期 " + Math.max(1, Math.round((nowTs - ts) / H)) + "h")
@@ -1232,10 +1391,12 @@
       '</div>' +
       '<button class="link" title="在 Notion 打开" aria-label="在 Notion 打开">↗</button>' +
       '<div class="row2">' +
-        '<span>' + (allDay ? "全天" : hhmm(ts)) + '</span>' +
+        '<span>' + chipTimeText(t, key) + '</span>' +
         (t.tag ? '<span class="tag">' + t.tag + '</span>' : '') +
         (lateText ? '<span class="late">' + lateText + '</span>' : '') +
-      '</div>'
+      '</div>' +
+      (allDay ? "" : '<div class="hedge top" data-edge="start"></div>' +
+                     '<div class="hedge bottom" data-edge="end"></div>')
     );
   }
 
@@ -1243,6 +1404,7 @@
   const dragtip = document.getElementById("dragtip");
   const TRACK_PROP = { sched: "安排日期", due: "截止日期" };
   const ALL_DAY_KEY = { sched: "allDaySched", due: "allDayDue" };
+  const END_KEY = { sched: "endSched", due: "endDue" };
   const DRAG_SNAP_MIN = 15;   // 吸附粒度
   const DRAG_CLICK_PX = 4;    // 位移小于这个像素数算点击，不写
   let dragActive = false;     // 拖拽中忽略缩放，否则像素位移和分钟数会换算错
@@ -1388,10 +1550,15 @@
         if (typeof hours === "number") {
           t[key] = hours;
           t[ALL_DAY_KEY[key]] = !!res.task[ALL_DAY_KEY[key]];
+          // 整卡平移：结束时刻跟着走，保持时长
+          if (typeof res.task[END_KEY[key]] === "number") {
+            t[END_KEY[key]] = res.task[END_KEY[key]];
+          }
           item.y = yOf(base + hours * H);
+          applyChipSpanHeight(item);
           const timeSpan = el.querySelector(".row2 span");
           if (timeSpan) {
-            timeSpan.textContent = t[ALL_DAY_KEY[key]] ? "全天" : hhmm(base + hours * H);
+            timeSpan.textContent = chipTimeText(t, key);
           }
           const late = key === "due" && base + hours * H < nowTs && t.status !== "done";
           el.classList.toggle("overdue", late);
@@ -1420,7 +1587,8 @@
     el.style.top = yOf(ts) + "px";
     el.dataset.id = t.id;
     el.dataset.status = t.status || "";
-    el.innerHTML = chipHtml(t, ts, late, key === "sched" ? t.allDaySched : t.allDayDue);
+    el.innerHTML = chipHtml(t, key, ts, late);
+    if (key === "sched" ? t.allDaySched : t.allDayDue) el.classList.add("allday");
 
     const linkBtn = el.querySelector(".link");
     if (linkBtn) {
@@ -1452,12 +1620,23 @@
     });
     el.addEventListener("mousedown", e => {
       if (e.button !== 0) return;                            // 只认左键
-      if (e.target.closest(".dot, button, input")) return;    // 状态点/按钮不参与拖拽
+      if (e.target.closest(".dot, button, input, .hedge")) return;  // 控件/上下沿不参与整卡拖拽
       startDrag(e, el, t, key);
+    });
+    el.querySelectorAll(".hedge").forEach(handle => {
+      handle.addEventListener("click", e => e.stopPropagation());
+      handle.addEventListener("mousedown", e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        startEdgeDrag(e, el, t, key, handle.dataset.edge);
+      });
     });
 
     lanes[key].appendChild(el);
-    return { el, y: yOf(ts), h: el.offsetHeight, t, key };
+    const item = { el, y: yOf(ts), h: el.offsetHeight, t, key };
+    applyChipSpanHeight(item);
+    return item;
   }
 
   function updateEmptyHint() {
@@ -1677,7 +1856,7 @@
     updateFontLabel();
     // 字变了 → 卡片高度变了，重新量高并重排（不影响 px/hour）
     ["sched", "due"].forEach(key => {
-      items[key].forEach(item => { item.h = item.el.offsetHeight; });
+      items[key].forEach(item => applyChipSpanHeight(item));
       layoutLane(key);
     });
 
@@ -1720,7 +1899,10 @@
     });
     rebuildHourTicks();
     ["sched", "due"].forEach(key => {
-      items[key].forEach(item => { item.y = yOf(base + item.t[item.key] * H); });
+      items[key].forEach(item => {
+        applyChipSpanHeight(item);
+        item.y = yOf(base + item.t[item.key] * H);
+      });
       layoutLane(key);   // 重算避让与 tick
     });
     scroll.scrollTop = Math.max(0, ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
@@ -2544,7 +2726,8 @@
           el.classList.toggle("done", t.status === "done");
           item.y = yOf(base + t[key] * H);
           const timeSpan = el.querySelector(".row2 span");
-          if (timeSpan) timeSpan.textContent = t[ALL_DAY_KEY[key]] ? "全天" : hhmm(base + t[key] * H);
+          if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+          applyChipSpanHeight(item);
           const late = key === "due" && base + t[key] * H < nowTs && t.status !== "done";
           el.classList.toggle("overdue", late);
         }

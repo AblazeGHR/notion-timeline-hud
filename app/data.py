@@ -47,6 +47,14 @@ def _hours(date: str, clock: str | None, today0: datetime) -> float:
     return round((moment - today0).total_seconds() / 3600, 3)
 
 
+def _end_hours(dv: Any, start_hours: float, today0: datetime) -> float | None:
+    """结束时刻（相对今天 0 点的小时数）；脏数据（end<=start）当没有结束。"""
+    if not getattr(dv, "end", None):
+        return None
+    end = _hours(dv.end, dv.end_time, today0)
+    return end if end > start_hours else None
+
+
 def _prop_text(task: Task, name: str) -> str:
     value = task.properties.get(name)
     return value.value if value and isinstance(value.value, str) else ""
@@ -77,9 +85,13 @@ def to_ui(tasks: list[Task]) -> dict[str, Any]:
         if sched is not None:
             item["sched"] = _hours(sched.start, sched.start_time, today0)
             item["allDaySched"] = sched.start_time is None
+            end_sched = _end_hours(sched, item["sched"], today0)
+            item["endSched"] = end_sched
         if due is not None:
             item["due"] = _hours(due.start, due.start_time, today0)
             item["allDayDue"] = due.start_time is None
+            end_due = _end_hours(due, item["due"], today0)
+            item["endDue"] = end_due
 
         if sched is None and due is None:
             undated.append({

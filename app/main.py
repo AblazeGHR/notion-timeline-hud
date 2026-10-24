@@ -22,6 +22,8 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime
+from collections.abc import Mapping
 from ctypes import wintypes
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
@@ -269,6 +271,28 @@ def refresh_loop(window: webview.Window, initial_digest: str) -> None:
             print(f"后台刷新：已重渲染（source={source}）", flush=True)
         except Exception as exc:  # noqa: BLE001
             print("后台刷新推送失败:", exc, flush=True)
+
+
+# ---------------------------------------------------------------- 卡片改时长
+
+
+def _parse_point(value: Any, label: str) -> tuple[str, str | None] | None:
+    """{"date": "YYYY-MM-DD", "time": "15:00"} → (date, time)；time 可为空。"""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label}格式不对")
+    date = str(value.get("date") or "").strip()
+    clock = str(value.get("time") or "").strip()
+    if not date:
+        raise ValueError(f"{label}缺少日期")
+    try:
+        datetime.fromisoformat(date + ("T" + clock if clock else "T00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label}格式不对（{date} {clock}）") from exc
+    if clock and len(clock) > 5:
+        clock = clock[:5]        # HH:MM:SS -> HH:MM（Notion 里存到分钟就够）
+    return date, (clock or None)
 
 
 # ---------------------------------------------------------------- 块编辑
@@ -1064,6 +1088,43 @@ class Api:
                 real = _resolve_status(client, name)
                 client.update_task(task_id, properties={"状态": PropertyValue("status", real)})
             return {"ok": True, "status": nxt}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def resize_task(
+        self, task_id: str, prop: str, start: dict | None, end: dict | None
+    ) -> dict:
+        """拖卡片上下沿：改起止时间（prop 只能是 安排日期 / 截止日期）。"""
+        if prop not in (TRACK_SCHED, TRACK_DUE):
+            return {"ok": False, "error": f"不支持的日期属性：{prop}"}
+        try:
+            start_point = _parse_point(start, "开始时间")
+            end_point = _parse_point(end, "结束时间")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if start_point is None:
+            return {"ok": False, "error": "缺少开始时间"}
+
+        start_dt = datetime.fromisoformat(start_point[0] + "T" + (start_point[1] or "00:00"))
+        if end_point is not None:
+            end_dt = datetime.fromisoformat(end_point[0] + "T" + (end_point[1] or "00:00"))
+            if end_dt <= start_dt:
+                return {"ok": False, "error": "结束时间必须晚于开始时间"}
+
+        value = DateValue(
+            start=start_point[0],
+            end=end_point[0] if end_point else None,
+            start_time=start_point[1],
+            end_time=end_point[1] if end_point else None,
+            time_zone=TZ,
+        )
+        try:
+            with NotionClient() as client:
+                updated = client.update_task(task_id, dates={prop: value})
+            ui = to_ui([updated])
+            if not ui["tasks"]:
+                return {"ok": False, "error": "改时长后任务没有日期"}
+            return {"ok": True, "task": ui["tasks"][0], "date": value.to_dict()}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
