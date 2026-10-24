@@ -121,6 +121,20 @@ def test_timeline_scale() -> None:
     assert config.load(path)["timeline_scale"] == 14.5, "失败后应保留上一次合法值"
 
 
+def test_font_scale() -> None:
+    path = _tmpdir() / "config.json"
+    assert config.load(path)["font_scale"] == 1.0
+    for good, want in ((0.8, 0.8), (1.5, 1.5), (1.2, 1.2), (1.234, 1.23)):
+        assert config.patch({"font_scale": good}, path)["font_scale"] == want
+    for bad in (0.79, 1.51, 0, True, "big", None):
+        try:
+            config.patch({"font_scale": bad}, path)
+        except ValueError:
+            continue
+        raise AssertionError(f"应该拒绝 {bad!r}")
+    assert config.load(path)["font_scale"] == 1.23
+
+
 def test_parse_hotkey() -> None:
     assert config.parse_hotkey("Ctrl+Alt+Space") == (config.MOD_CONTROL | config.MOD_ALT, 0x20)
     assert config.parse_hotkey("ctrl+shift+f9") == (config.MOD_CONTROL | config.MOD_SHIFT, 0x78)

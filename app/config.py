@@ -18,6 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "hotkey": "Ctrl+Alt+Space",
     "opacity": 0.66,
     "timeline_scale": 14.0,
+    "font_scale": 1.0,
     "theme": "dark",
     "hide_on_blur": True,
     "release_memory_minutes": 15,
@@ -26,6 +27,8 @@ DEFAULTS: dict[str, Any] = {
 
 SCALE_MIN = 6.0
 SCALE_MAX = 40.0
+FONT_MIN = 0.8
+FONT_MAX = 1.5
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -101,6 +104,15 @@ def _as_scale(value: Any) -> float:
     return round(number * 2) / 2  # 取整到 0.5，和界面一致
 
 
+def _as_font_scale(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"font_scale 必须是 {FONT_MIN}~{FONT_MAX} 的数字")
+    number = float(value)
+    if not FONT_MIN <= number <= FONT_MAX:
+        raise ValueError(f"font_scale 必须在 {FONT_MIN}~{FONT_MAX} 之间")
+    return round(number, 2)
+
+
 def _as_theme(value: Any) -> str:
     if value not in ("dark", "light"):
         raise ValueError("theme 只能是 dark 或 light")
@@ -131,6 +143,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "hotkey": _as_hotkey,
     "opacity": _as_opacity,
     "timeline_scale": _as_scale,
+    "font_scale": _as_font_scale,
     "theme": _as_theme,
     "hide_on_blur": lambda v: _as_bool(v, "hide_on_blur"),
     "release_memory_minutes": _as_minutes,

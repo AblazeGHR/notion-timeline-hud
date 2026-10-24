@@ -9,6 +9,7 @@
     /* 面板底色拆成 rgb + alpha，透明度滑杆只改 --panel-alpha，不动配色 */
     --panel-rgb: 16, 17, 22;
     --panel-alpha: 0.66;
+    --font-scale: 1;          /* 条目字号缩放，和时间轴密度无关 */
     --panel-line: rgba(255, 255, 255, 0.09);
     --text: #ECECF1;
     --dim: #8E8F9C;
@@ -142,7 +143,12 @@
   .sub b { color: #CFD0D9; font-weight: 500; }
   .sub .warn { color: #FF9AAE; }
 
-  .actions { display: flex; gap: 2px; }
+  .actions { display: flex; gap: 2px; align-items: center; }
+  .fontbtn { width: 24px; font-size: 11px; font-weight: 600; letter-spacing: 0; }
+  .fontval {
+    font-size: 9px; font-weight: 400; color: var(--faint);
+    min-width: 30px; text-align: center; font-variant-numeric: tabular-nums;
+  }
   .iconbtn {
     width: 28px; height: 28px; border: 0; border-radius: 8px;
     background: transparent; color: var(--dim);
@@ -293,6 +299,7 @@
     border-left: 2px solid var(--lane-color, var(--accent));
     cursor: default;
     user-select: none;
+    min-height: calc(30px * var(--font-scale, 1));
     transition: transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s;
   }
   .chip:hover {
@@ -322,7 +329,7 @@
   .dot.done  { background: var(--done); }
 
   .chip .t {
-    font-size: 12px; line-height: 1.32; letter-spacing: .1px;
+    font-size: calc(12px * var(--font-scale, 1)); line-height: 1.32; letter-spacing: .1px;
     color: #E6E6EC;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -331,7 +338,7 @@
   .chip .row2 {
     display: flex; align-items: center; gap: 5px;
     margin-top: 2px; padding-left: 11px;
-    font-size: 9px; color: var(--faint);
+    font-size: calc(9px * var(--font-scale, 1)); color: var(--faint);
     font-variant-numeric: tabular-nums;
     white-space: nowrap; overflow: hidden;
   }
@@ -618,6 +625,9 @@
       <div class="sub" id="summary">今天 0 项 · 逾期 0 项</div>
     </div>
     <div class="actions">
+      <button class="iconbtn fontbtn" id="btnFontDec" title="缩小字号">A−</button>
+      <button class="iconbtn fontbtn" id="btnFontInc" title="放大字号">A+</button>
+      <b class="fontval" id="fontValue">100%</b>
       <button class="iconbtn" id="btnSettings" title="设置">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg>
       </button>
@@ -748,6 +758,17 @@
   let START_DAY = -2;
   let DAYS = 8;
   let canvasStart = base + START_DAY * DAY;
+
+  /* 字号缩放：只作用于条目文字（0.85~1.4，步进 0.05），和时间轴密度无关 */
+  const FONT_MIN = 0.85, FONT_MAX = 1.4, FONT_STEP = 0.05;
+  let FONT_SCALE = clampFont(CFG.font_scale == null ? 1 : CFG.font_scale);
+  document.documentElement.style.setProperty("--font-scale", String(FONT_SCALE));
+
+  function clampFont(value) {
+    const v = Math.round(Number(value) * 100) / 100;
+    if (!isFinite(v)) return 1;
+    return Math.min(FONT_MAX, Math.max(FONT_MIN, v));
+  }
 
   function clampScale(value) {
     const v = Math.round(Number(value) * 2) / 2;   // 取整到 0.5
@@ -1132,6 +1153,24 @@
   window.addEventListener("resize", () => scrollToNow(false));
   document.getElementById("btnRefresh").addEventListener("click", () => scrollToNow(true));
 
+  /* ---------- 字号缩放 ---------- */
+  function updateFontLabel() {
+    const label = document.getElementById("fontValue");
+    if (label) label.textContent = Math.round(FONT_SCALE * 100) + "%";
+  }
+
+  function applyFontScale(value) {
+    FONT_SCALE = clampFont(value);
+    document.documentElement.style.setProperty("--font-scale", String(FONT_SCALE));
+    updateFontLabel();
+    // 字变了 → 卡片高度变了，重新量高并重排（不影响 px/hour）
+    ["sched", "due"].forEach(key => {
+      items[key].forEach(item => { item.h = item.el.offsetHeight; });
+      layoutLane(key);
+    });
+    return FONT_SCALE;
+  }
+
   /* ---------- 时间轴密度（px/hour） ---------- */
   function updateScaleLabel() {
     const label = document.getElementById("scaleValue");
@@ -1281,6 +1320,23 @@
     else alert("设置失败：" + ((res && res.error) || "未知错误"));
   });
 
+  const btnFontDec = document.getElementById("btnFontDec");
+  const btnFontInc = document.getElementById("btnFontInc");
+  let fontSaveTimer = null;
+  function nudgeFont(delta) {
+    applyFontScale(FONT_SCALE + delta);
+    clearTimeout(fontSaveTimer);
+    fontSaveTimer = setTimeout(async () => {
+      const api = bridge();
+      if (!api) return;
+      const res = await api.set_config({ font_scale: FONT_SCALE });
+      if (!res || !res.ok) alert("字号没保存上：" + ((res && res.error) || "未知错误"));
+    }, 300);
+  }
+  btnFontDec.addEventListener("click", () => nudgeFont(-FONT_STEP));
+  btnFontInc.addEventListener("click", () => nudgeFont(FONT_STEP));
+  updateFontLabel();
+
   async function syncConfig() {
     const api = bridge();
     if (!api) return;
@@ -1301,6 +1357,7 @@
       DEFAULT_SCALE = clampScale(cfg.timeline_scale);
       applyScale(DEFAULT_SCALE);
     }
+    if (cfg.font_scale != null) applyFontScale(cfg.font_scale);
   }
   if (window.pywebview) syncConfig();
   else window.addEventListener("pywebviewready", syncConfig);
@@ -1384,9 +1441,11 @@
         el.classList.toggle("done", status === "done");
       });
     },
-    /* 密度调试/自测入口 */
+    /* 密度/字号调试自测入口 */
     setScale(value) { return applyScale(value); },
     getScale() { return PX_PER_HOUR; },
+    setFontScale(value) { return applyFontScale(value); },
+    getFontScale() { return FONT_SCALE; },
     resetScale() { resetScale(); return PX_PER_HOUR; },
   };
 
