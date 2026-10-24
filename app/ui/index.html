@@ -1301,12 +1301,14 @@
     const startMin0 = Math.round(t[key] * 60);
     const endMin0 = hadEnd ? Math.round(t[END_KEY[key]] * 60) : startMin0 + 30;
     const baseH = el._baseH || el.offsetHeight;
-    const startY = e.clientY;
+    const baseMin = base / 60000;          // 今天 0 点的绝对分钟，用于换算
+    let pointerY = e.clientY;
     const top0 = parseFloat(el.style.top) || item.y;
     const height0 = el.offsetHeight;
     let dragging = false;
     let curStart = startMin0;
     let curEnd = hadEnd ? endMin0 : null;
+    let raf = 0;
 
     document.body.classList.add("drag-lock");
     dragActive = true;
@@ -1325,33 +1327,61 @@
       layoutLane(key);
     };
 
-    const onMove = ev => {
-      const dy = ev.clientY - startY;
-      if (!dragging) {
-        if (Math.abs(dy) < 3) return;
-        dragging = true;
-        el.classList.add("edge-drag");
-      }
-      const delta = Math.round((dy / PX_PER_MIN) / 15) * 15;
+    /* 预览：按「指针 y + scrollTop」算目标时刻，滚动后也跟手 */
+    const applyPreview = y => {
+      const relMin = minuteAt(y) - baseMin;
       if (side === "start") {
-        curStart = hadEnd ? Math.min(startMin0 + delta, endMin0 - 15) : startMin0 + delta;
+        curStart = hadEnd ? Math.min(relMin, endMin0 - 15) : relMin;
         el.style.top = yOf(base + curStart * 60000) + "px";
         if (hadEnd) {
           el.style.height = Math.max(baseH, (endMin0 - curStart) * PX_PER_MIN) + "px";
         }
       } else {
-        curEnd = Math.max(endMin0 + delta, startMin0 + 15);
+        curEnd = Math.max(relMin, startMin0 + 15);
         el.style.height = Math.max(baseH, (curEnd - startMin0) * PX_PER_MIN) + "px";
       }
       const tipMin = side === "start" ? curStart : curEnd;
       dragtip.textContent = hhmm(base + tipMin * 60000);
-      dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 90) + "px";
-      dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
+      dragtip.style.left = Math.min(window.innerWidth - 90, 240) + "px";
+      dragtip.style.top = Math.max(4, y - 28) + "px";
       dragtip.classList.add("on");
+    };
+
+    /* 贴边自动滚：2~8px/帧，滚动后重算预览 */
+    const autoStep = () => {
+      raf = 0;
+      if (!dragging) return;
+      const rect = scroll.getBoundingClientRect();
+      let speed = 0;
+      if (pointerY < rect.top + DRAG_EDGE_PX) {
+        const k = Math.min(1, (rect.top + DRAG_EDGE_PX - pointerY) / DRAG_EDGE_PX);
+        speed = -(DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k);
+      } else if (pointerY > rect.bottom - DRAG_EDGE_PX) {
+        const k = Math.min(1, (pointerY - (rect.bottom - DRAG_EDGE_PX)) / DRAG_EDGE_PX);
+        speed = DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k;
+      }
+      if (speed) {
+        const before = scroll.scrollTop;
+        scroll.scrollTop = before + speed;
+        if (scroll.scrollTop !== before) applyPreview(pointerY);
+      }
+      raf = requestAnimationFrame(autoStep);
+    };
+
+    const onMove = ev => {
+      pointerY = ev.clientY;
+      if (!dragging) {
+        if (Math.abs(ev.clientY - e.clientY) < 3) return;
+        dragging = true;
+        el.classList.add("edge-drag");
+        raf = requestAnimationFrame(autoStep);
+      }
+      applyPreview(pointerY);
     };
 
     const detach = () => {
       dragActive = false;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("keydown", onKey, true);
