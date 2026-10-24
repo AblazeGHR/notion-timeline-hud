@@ -870,6 +870,12 @@
   .dnote { font-size: 9.5px; color: var(--faint); margin-top: 6px; }
   .dempty { color: var(--faint); font-size: 11px; padding: 14px 0; text-align: center; }
   .derror { color: #FF9AAE; font-size: 11px; padding: 10px 0; }
+  .derror.inline {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 5px 0 7px; margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255,107,138,.25);
+  }
+  .derror.inline button { margin-top: 0; }
   .derror button {
     margin-top: 6px; height: 22px; padding: 0 8px; border-radius: 6px; cursor: pointer;
     border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06);
@@ -2847,6 +2853,25 @@
     dContent.appendChild(note);
   }
 
+  /* 保留旧内容时的内联错误条：一行提示 + 重试 */
+  function showInlineError(message) {
+    let bar = dContent.querySelector(".derror.inline");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.className = "derror inline";
+      dContent.insertBefore(bar, dContent.firstChild);
+    }
+    bar.textContent = (message || "刷新失败") + " ";
+    const retry = document.createElement("button");
+    retry.textContent = "重试";
+    retry.addEventListener("click", e => {
+      e.stopPropagation();
+      bar.remove();
+      loadContent(detailTask, { refresh: true });
+    });
+    bar.appendChild(retry);
+  }
+
   function renderContentError(message) {
     contentSeq += 1;
     dContent.innerHTML = "";
@@ -2883,7 +2908,7 @@
       const message = (res && res.error) || "未知错误";
       if (hadContent) {
         dContent.innerHTML = snapshot;               // 失败保留旧内容
-        alert("刷新失败：" + message);
+        showInlineError(message);                    // 内联错误条 + 重试
       } else {
         renderContentError(message);
       }
