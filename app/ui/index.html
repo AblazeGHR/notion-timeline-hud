@@ -572,6 +572,14 @@
     cursor: pointer;
   }
   .seg button.on { background: rgba(255,255,255,.11); color: #E8E8EE; }
+  .quitbtn {
+    height: 23px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255,107,138,.32);
+    background: rgba(255,107,138,.12); color: #FF9AAE;
+    font-family: inherit; font-size: 10.5px;
+  }
+  .quitbtn:hover { background: rgba(255,107,138,.24); }
+  body.theme-light .quitbtn { color: #C4384F; }
   .sfoot { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.055);
            font-size: 9.5px; color: var(--faint); display: flex; justify-content: space-between; }
   .sfoot .ok { color: #35CE94; }
@@ -824,6 +832,10 @@
     <div class="srow">
       <span>开机自启</span>
       <span class="switch on" id="swAutostart" data-toggle></span>
+    </div>
+    <div class="srow">
+      <span>退出应用</span>
+      <button class="quitbtn" id="btnQuit">退出</button>
     </div>
     <div class="srow">
       <span>隐藏 15 分钟后释放内存</span>
@@ -1584,6 +1596,13 @@
     const res = await api.set_autostart(target);
     if (res && res.ok) swAutostart.classList.toggle("on", target);
     else alert("开机自启设置失败：" + ((res && res.error) || "未知错误"));
+  });
+
+  document.getElementById("btnQuit").addEventListener("click", e => {
+    e.stopPropagation();
+    if (!confirm("退出 Timeline HUD？任务不会受影响。")) return;
+    const api = bridge();
+    if (api) api.quit();
   });
 
   swRelease.addEventListener("click", async () => {
