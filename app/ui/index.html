@@ -874,6 +874,20 @@
     background: rgba(124,140,255,.22); border-color: rgba(124,140,255,.45); color: #EDEEF7;
   }
 
+  /* ---------------- 轻量提示（toast） ---------------- */
+  .toast {
+    position: fixed; right: 12px; bottom: 54px; z-index: 100;
+    max-width: 300px; padding: 7px 11px; border-radius: 8px;
+    background: rgba(24,25,31,.97); border: 1px solid rgba(255,255,255,.12);
+    box-shadow: 0 12px 30px -10px rgba(0,0,0,.9);
+    color: #E9E9F0; font-size: 11px; line-height: 1.45;
+    opacity: 0; transform: translateY(6px);
+    transition: opacity .16s ease, transform .16s ease;
+    pointer-events: none;        /* 不挡任何点击 */
+  }
+  .toast.on { opacity: 1; transform: none; }
+  .toast.bad { border-color: rgba(255,107,138,.4); color: #FFC9D2; }
+
   /* 桌面壳模式：窗口本身就是面板，不画假桌面 */
   html:has(body.desktop) { background: transparent; }   /* 否则 html 的 #08090D 会挡住亚克力 */
   body.desktop { background: transparent; }
@@ -997,7 +1011,7 @@
     <div class="srow">
       <span>面板透明度</span>
       <span class="density">
-        <input type="range" class="slider" id="opacitySlider" min="15" max="95" step="1" value="82">
+        <input type="range" class="slider" id="opacitySlider" min="20" max="95" step="1" value="82">
         <b id="opacityValue">82%</b>
       </span>
     </div>
@@ -1041,6 +1055,7 @@
 </div>
 
 <div class="dragtip" id="dragtip"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <div class="detail" id="detail" data-tab="content">
   <div class="dtabs" id="dTabs">
@@ -1099,6 +1114,42 @@
     return (window.pywebview && window.pywebview.api) || null;
   }
 
+  /* 轻提示：3s 自动消失，pointer-events:none，不打断操作 */
+  const toastEl = document.getElementById("toast");
+  let toastTimer = null;
+  function toast(message, kind) {
+    if (!toastEl) return;
+    toastEl.textContent = String(message || "");
+    toastEl.classList.toggle("bad", kind !== "ok");
+    toastEl.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove("on"), 3000);
+  }
+
+  /* 发 set_config 前统一 clamp 到 config.py 认的范围，越界值直接夹住，不弹提示 */
+  const CFG_LIMITS = {
+    opacity: [0.2, 1],
+    timeline_scale: [6, 48],
+    font_scale: [0.8, 1.5],        // 与 config.py 的 FONT_MIN/FONT_MAX 对齐
+    release_memory_minutes: [0, 600],
+    refresh_seconds: [0, 3600],
+  };
+  function clampPatch(patch) {
+    const out = Object.assign({}, patch);
+    Object.keys(out).forEach(key => {
+      const range = CFG_LIMITS[key];
+      const value = out[key];
+      if (!range || typeof value !== "number" || !Number.isFinite(value)) return;
+      out[key] = Math.min(range[1], Math.max(range[0], value));
+    });
+    return out;
+  }
+  async function setConfig(patch) {
+    const api = bridge();
+    if (!api) return null;
+    return api.set_config(clampPatch(patch));
+  }
+
   const NOW = new Date();
   const H = 3600000;
   const DAY = 86400000;
@@ -1117,6 +1168,7 @@
 
   /* 字号缩放：只作用于条目文字（0.85~1.4，步进 0.05），和时间轴密度无关 */
   const FONT_MIN = 0.85, FONT_MAX = 1.4, FONT_STEP = 0.05;
+  const EDGE_MIN_MINUTES = 15;   // 上下沿之间至少留 15 分钟，拖到边界就停
   let FONT_SCALE = clampFont(CFG.font_scale == null ? 1 : CFG.font_scale);
   document.documentElement.style.setProperty("--font-scale", String(FONT_SCALE));
 
@@ -1318,13 +1370,13 @@
     const applyPreview = y => {
       const relMin = minuteAt(y) - baseMin;
       if (side === "start") {
-        curStart = hadEnd ? Math.min(relMin, endMin0 - 15) : relMin;
+        curStart = hadEnd ? Math.min(relMin, endMin0 - EDGE_MIN_MINUTES) : relMin;
         el.style.top = yOf(base + curStart * 60000) + "px";
         if (hadEnd) {
           el.style.height = Math.max(baseH, (endMin0 - curStart) * PX_PER_MIN) + "px";
         }
       } else {
-        curEnd = Math.max(relMin, startMin0 + 15);
+        curEnd = Math.max(relMin, startMin0 + EDGE_MIN_MINUTES);
         el.style.height = Math.max(baseH, (curEnd - startMin0) * PX_PER_MIN) + "px";
       }
       const tipMin = side === "start" ? curStart : curEnd;
@@ -1374,20 +1426,26 @@
       }
       const api = bridge();
       if (!api) { restore(); return; }
+      const submitStart = hadEnd
+        ? Math.min(curStart, endMin0 - EDGE_MIN_MINUTES)
+        : curStart;
+      const submitEnd = curEnd === null
+        ? null
+        : Math.max(curEnd, submitStart + EDGE_MIN_MINUTES);
       el.style.opacity = ".7";
       const res = await api.resize_task(
-        t.id, TRACK_PROP[key], pointOf(curStart), curEnd === null ? null : pointOf(curEnd));
+        t.id, TRACK_PROP[key], pointOf(submitStart), submitEnd === null ? null : pointOf(submitEnd));
       el.style.opacity = "";
       if (res && res.ok) {
-        t[key] = curStart / 60;
-        t[END_KEY[key]] = curEnd === null ? null : curEnd / 60;
+        t[key] = submitStart / 60;
+        t[END_KEY[key]] = submitEnd === null ? null : submitEnd / 60;
         item.y = yOf(base + t[key] * H);
         const timeSpan = el.querySelector(".row2 span");
         if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
         applyChipSpanHeight(item);
       } else {
         restore();
-        alert("调整失败：" + ((res && res.error) || "未知错误"));
+        toast("调整失败：" + ((res && res.error) || "未知错误"));
       }
       layoutLane(key);
     };
@@ -1602,7 +1660,7 @@
         }
       } else {
         restore();
-        alert("改期失败：" + ((res && res.error) || "未知错误"));
+        toast("改期失败：" + ((res && res.error) || "未知错误"));
       }
       layoutLane(key);
     };
@@ -1888,7 +1946,7 @@
     try {
       const res = await refreshData();
       if (!res) return;
-      if (!res.data) alert("刷新失败：" + ((res && res.error) || "未知错误"));
+      if (!res.data) toast("刷新失败：" + ((res && res.error) || "未知错误"));
     } finally {
       btn.classList.remove("spinning");
     }
@@ -1994,7 +2052,7 @@
 
   /* 滑块 → --panel-alpha（遮罩层跟着变）+ 百分比文案 */
   function applyOpacity(percent) {
-    const value = Math.max(15, Math.min(95, Math.round(Number(percent) || 82)));
+    const value = Math.max(20, Math.min(95, Math.round(Number(percent) || 82)));
     const alpha = value / 100;
     document.documentElement.style.setProperty("--panel-alpha", alpha.toFixed(2));
     const label = document.getElementById("opacityValue");
@@ -2018,12 +2076,12 @@
     const api = bridge();
     if (!api) return;
     if (api.set_panel_opacity) api.set_panel_opacity(alpha);   // 亚克力 tint 跟着走
-    const res = await api.set_config({ opacity: alpha });
+    const res = await setConfig({ opacity: alpha });
     if (res && res.ok) {
       slider.dataset.saved = String(Math.round(alpha * 100));
     } else {
       applyOpacity(previous * 100);
-      alert("透明度没保存上：" + ((res && res.error) || "未知错误"));
+      toast("透明度没保存上：" + ((res && res.error) || "未知错误"));
     }
   }
 
@@ -2035,11 +2093,10 @@
     applyScale(value);          // 即时生效
     clearTimeout(scaleSaveTimer);
     scaleSaveTimer = setTimeout(async () => {
-      const api = bridge();
-      if (!api) return;
-      const res = await api.set_config({ timeline_scale: value });
+      if (!bridge()) return;
+      const res = await setConfig({ timeline_scale: value });
       if (!res || !res.ok) {
-        alert("密度没保存上：" + ((res && res.error) || "未知错误"));
+        toast("密度没保存上：" + ((res && res.error) || "未知错误"));
         if (res && res.config) {
           DEFAULT_SCALE = clampScale(res.config.timeline_scale);
           applyScale(DEFAULT_SCALE);
@@ -2071,7 +2128,7 @@
     if (introReported) return;
     introReported = true;
     const api = bridge();
-    if (api) api.set_config({ seen_intro: true });
+    if (api) setConfig({ seen_intro: true });
   }
 
   document.getElementById("introClose").addEventListener("click", e => {
@@ -2149,7 +2206,7 @@
     const api = bridge();
     stopCapture();
     if (!api) { showHotkeyHint("浏览器预览不能改快捷键"); return; }
-    const res = await api.set_config({ hotkey: combo });
+    const res = await setConfig({ hotkey: combo });
     if (res && res.ok) {
       hotkeyRow.dataset.saved = combo;
       renderHotkey(combo);
@@ -2171,10 +2228,10 @@
     swOpenInApp.classList.toggle("on", target);   // 先动，失败回滚
     const api = bridge();
     if (!api) return;
-    const res = await api.set_config({ open_in_app: target });
+    const res = await setConfig({ open_in_app: target });
     if (!res || !res.ok) {
       swOpenInApp.classList.toggle("on", !target);
-      alert("保存失败：" + ((res && res.error) || "未知错误"));
+      toast("保存失败：" + ((res && res.error) || "未知错误"));
     }
   });
 
@@ -2184,10 +2241,10 @@
     swHideBlur.classList.toggle("on", target);
     const api = bridge();
     if (!api) return;
-    const res = await api.set_config({ hide_on_blur: target });
+    const res = await setConfig({ hide_on_blur: target });
     if (!res || !res.ok) {
       swHideBlur.classList.toggle("on", !target);
-      alert("保存失败：" + ((res && res.error) || "未知错误"));
+      toast("保存失败：" + ((res && res.error) || "未知错误"));
     }
   });
 
@@ -2204,7 +2261,7 @@
       const on = (res.enabled === null || res.enabled === undefined) ? target : !!res.enabled;
       swAutostart.classList.toggle("on", on);
     } else {
-      alert("开机自启设置失败：" + ((res && res.error) || "未知错误"));
+      toast("开机自启设置失败：" + ((res && res.error) || "未知错误"));
     }
   });
 
@@ -2222,9 +2279,9 @@
       swRelease.classList.toggle("on", target);
       return;
     }
-    const res = await api.set_config({ release_memory_minutes: target ? 15 : 0 });
+    const res = await setConfig({ release_memory_minutes: target ? 15 : 0 });
     if (res && res.ok) swRelease.classList.toggle("on", target);
-    else alert("设置失败：" + ((res && res.error) || "未知错误"));
+    else toast("设置失败：" + ((res && res.error) || "未知错误"));
   });
 
   const btnFontDec = document.getElementById("btnFontDec");
@@ -2234,10 +2291,9 @@
     applyFontScale(FONT_SCALE + delta);
     clearTimeout(fontSaveTimer);
     fontSaveTimer = setTimeout(async () => {
-      const api = bridge();
-      if (!api) return;
-      const res = await api.set_config({ font_scale: FONT_SCALE });
-      if (!res || !res.ok) alert("字号没保存上：" + ((res && res.error) || "未知错误"));
+      if (!bridge()) return;
+      const res = await setConfig({ font_scale: FONT_SCALE });
+      if (!res || !res.ok) toast("字号没保存上：" + ((res && res.error) || "未知错误"));
     }, 300);
   }
   btnFontDec.addEventListener("click", () => nudgeFont(-FONT_STEP));
@@ -2400,7 +2456,7 @@
       } else {
         done = false;
         el.style.opacity = "";
-        alert("创建失败：" + ((res && res.error) || "未知错误"));
+        toast("创建失败：" + ((res && res.error) || "未知错误"));
         input.focus();
       }
     };
@@ -2608,7 +2664,7 @@
       window.__hud.remove(t.id);
       selIndex = Math.max(0, Math.min(selIndex, laneItems().length - 1));
     } else {
-      alert("删除失败：" + ((res && res.error) || "未知错误"));
+      toast("删除失败：" + ((res && res.error) || "未知错误"));
     }
   }
 
@@ -2845,7 +2901,7 @@
         txt.textContent = value;
       } else {
         txt.textContent = before;
-        alert("保存失败：" + ((res && res.error) || "未知错误"));
+        toast("保存失败：" + ((res && res.error) || "未知错误"));
       }
     };
     const onKey = ev => {
@@ -2875,7 +2931,7 @@
       const box = el.querySelector(".bcheck");
       if (box) box.textContent = next ? "☑" : "☐";
     } else {
-      alert("勾选失败：" + ((res && res.error) || "未知错误"));
+      toast("勾选失败：" + ((res && res.error) || "未知错误"));
     }
   }
 
@@ -2891,7 +2947,7 @@
       if (!dContent.querySelector(".blk")) renderContent({ blocks: [] });
     } else {
       el.classList.remove("saving");
-      alert("删除失败：" + ((res && res.error) || "未知错误"));
+      toast("删除失败：" + ((res && res.error) || "未知错误"));
     }
   }
 
@@ -2904,7 +2960,7 @@
     const res = await api.append_paragraph(detailTask.id, "");
     if (btn) btn.disabled = false;
     if (!res || !res.ok) {
-      alert("添加失败：" + ((res && res.error) || "未知错误"));
+      toast("添加失败：" + ((res && res.error) || "未知错误"));
       return;
     }
     const block = { id: res.block_id, type: "paragraph", text: "", checked: false, lang: "", level: 1 };
@@ -3164,7 +3220,7 @@
       applyDetailResult(res.task);
     } else {
       revertDetail();
-      alert("保存失败：" + ((res && res.error) || "未知错误"));
+      toast("保存失败：" + ((res && res.error) || "未知错误"));
     }
   }
 
@@ -3302,6 +3358,7 @@
     setFontScale(value) { return applyFontScale(value); },
     getFontScale() { return FONT_SCALE; },
     resetScale() { resetScale(); return PX_PER_HOUR; },
+    clampConfig(patch) { return clampPatch(patch); },
   };
 
   const ctx = document.getElementById("ctxmenu");
@@ -3338,7 +3395,7 @@
       if (!confirm("删除「" + task.title + "」？会移入 Notion 回收站。")) return;
       const res = await window.pywebview.api.delete_task(task.id);
       if (res && res.ok) window.__hud.remove(task.id);
-      else alert("删除失败：" + ((res && res.error) || "未知错误"));
+      else toast("删除失败：" + ((res && res.error) || "未知错误"));
     }
   });
 
