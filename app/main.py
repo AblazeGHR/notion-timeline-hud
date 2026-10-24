@@ -271,6 +271,31 @@ def refresh_loop(window: webview.Window, initial_digest: str) -> None:
             print("后台刷新推送失败:", exc, flush=True)
 
 
+# ---------------------------------------------------------------- 块编辑
+
+_EDITABLE_BLOCK_TYPES = {
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "quote", "callout", "code", "toggle",
+    "to_do",     # 只改 rich_text，不动 checked
+}
+
+
+def _block_error(exc: Exception) -> str:
+    """把 HTTP 错误翻成能看的话。"""
+    message = str(exc)
+    if "HTTP 403" in message:
+        return "没有权限编辑这一块"
+    if "HTTP 404" in message:
+        return "块不存在或已被删除"
+    if "HTTP 429" in message:
+        return "请求太频繁，稍后再试"
+    return message
+
+
+def _text_payload(text: str) -> list[dict]:
+    return [{"type": "text", "text": {"content": str(text)}}]
+
+
 # ---------------------------------------------------------------- 页面内容
 
 _BLOCK_TYPES = {
@@ -1041,6 +1066,52 @@ class Api:
             return {"ok": True, "status": nxt}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
+
+    def update_block_text(self, block_id: str, text: str) -> dict:
+        """改一个文本块的文字（rich_text 会合并成单 run）。"""
+        try:
+            with NotionClient() as client:
+                block = client.get_block(block_id)
+                btype = str(block.get("type") or "")
+                if btype not in _EDITABLE_BLOCK_TYPES:
+                    return {"ok": False, "error": f"{btype} 块不支持改文字"}
+                client.update_block(block_id, {btype: {"rich_text": _text_payload(text)}})
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": _block_error(exc)}
+        _page_content_cache.clear()
+        return {"ok": True}
+
+    def set_todo_checked(self, block_id: str, checked: bool) -> dict:
+        try:
+            with NotionClient() as client:
+                client.update_block(block_id, {"to_do": {"checked": bool(checked)}})
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": _block_error(exc)}
+        _page_content_cache.clear()
+        return {"ok": True, "checked": bool(checked)}
+
+    def append_paragraph(self, page_id: str, text: str = "") -> dict:
+        try:
+            with NotionClient() as client:
+                data = client.append_children(page_id, [{
+                    "object": "block", "type": "paragraph",
+                    "paragraph": {"rich_text": _text_payload(text)},
+                }])
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": _block_error(exc)}
+        _page_content_cache.clear()
+        results = data.get("results") or [{}]
+        return {"ok": True, "block_id": results[0].get("id"), "text": text}
+
+    def delete_block(self, block_id: str) -> dict:
+        """DELETE 只是移入回收站（Notion 没有硬删除）。"""
+        try:
+            with NotionClient() as client:
+                client.delete_task(block_id)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": _block_error(exc)}
+        _page_content_cache.clear()
+        return {"ok": True}
 
     def get_page_content(self, page_id: str) -> dict:
         """详情弹窗「内容」页：只读拉取该页的块（60s 内复用）。"""

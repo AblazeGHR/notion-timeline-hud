@@ -440,6 +440,19 @@ class NotionClient:
             if not cursor:
                 return tasks
 
+    def get_block(self, block_id: str) -> dict[str, Any]:
+        """GET /v1/blocks/{id}：拿块的 type 和内容（改文字前先确认类型）。"""
+        return self._request("GET", f"/v1/blocks/{block_id}")
+
+    def update_block(self, block_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """PATCH /v1/blocks/{id}：payload 形如 {"paragraph": {"rich_text": [...]}}。"""
+        return self._request("PATCH", f"/v1/blocks/{block_id}", json=payload)
+
+    def append_children(self, block_id: str, children: list[dict[str, Any]]) -> dict[str, Any]:
+        """PATCH /v1/blocks/{id}/children：追加子块。"""
+        return self._request("PATCH", f"/v1/blocks/{block_id}/children",
+                             json={"children": children})
+
     def get_block_children(
         self,
         block_id: str,

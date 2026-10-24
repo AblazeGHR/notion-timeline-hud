@@ -789,9 +789,32 @@
   .blk[data-type="heading_3"] { font-size: 12.5px; font-weight: 600; margin: 4px 0 2px; }
   .blk[data-type="bulleted_list_item"]::before { content: "•"; margin-right: 6px; color: var(--faint); }
   .blk[data-type="numbered_list_item"]::before { content: attr(data-index) "."; margin-right: 5px; color: var(--faint); }
-  .blk[data-type="to_do"]::before { content: "☐"; margin-right: 6px; color: var(--faint); }
-  .blk[data-type="to_do"].done::before { content: "☑"; color: #35CE94; }
-  .blk[data-type="to_do"].done { color: var(--faint); text-decoration: line-through; }
+  .blk { position: relative; padding-right: 18px; }
+  .blk .bcheck { cursor: pointer; margin-right: 6px; color: var(--faint); user-select: none; }
+  .blk.done .bcheck { color: #35CE94; }
+  .blk.done .btxt { color: var(--faint); text-decoration: line-through; }
+  .blk .btxt { outline: 0; border-radius: 4px; }
+  .blk .btxt.editing {
+    outline: 1px solid rgba(124,140,255,.6); background: rgba(124,140,255,.08);
+    padding: 0 3px; display: inline-block; min-width: 40px;
+  }
+  .blk.saving { opacity: .45; pointer-events: none; }
+  .blk .bdel {
+    position: absolute; right: 0; top: 0; width: 16px; height: 16px; padding: 0;
+    line-height: 14px; text-align: center; border: 0; border-radius: 4px;
+    background: transparent; color: var(--faint); opacity: 0;
+    cursor: pointer; font-size: 12px; font-family: inherit;
+  }
+  .blk:hover .bdel { opacity: .85; }
+  .blk .bdel:hover { background: rgba(255,107,138,.25); color: #FF9AAE; }
+  .dadd {
+    width: 100%; height: 26px; margin: 8px 0 4px; border-radius: 6px; cursor: pointer;
+    border: 1px dashed rgba(255,255,255,.16); background: transparent;
+    color: var(--faint); font-family: inherit; font-size: 10.5px;
+  }
+  .dadd:hover { background: rgba(255,255,255,.05); color: var(--text); }
+  .dadd:disabled { opacity: .5; cursor: default; }
+  body.theme-light .dadd { border-color: rgba(0,0,0,.18); }
   .blk[data-type="quote"] { border-left: 2px solid rgba(255,255,255,.18); padding-left: 8px; color: var(--dim); }
   .blk[data-type="code"] {
     background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.07);
@@ -2064,6 +2087,7 @@
     }
     const tag = e.target && e.target.tagName;
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    if (e.target && e.target.isContentEditable) return;   // 正文块正在编辑
 
     if (e.key === "ArrowLeft") { setTrack("sched"); selIndex = -1; return; }
     if (e.key === "ArrowRight") { setTrack("due"); selIndex = -1; return; }
@@ -2201,6 +2225,7 @@
   const dContent = document.getElementById("dContent");
   const dTabs = document.getElementById("dTabs");
   let contentSeq = 0;
+  let currentBlocks = [];
 
   function setDetailTab(tab) {
     detail.dataset.tab = tab;
@@ -2208,19 +2233,157 @@
       b.classList.toggle("on", b.dataset.tab === tab));
   }
 
+  const EDITABLE_BLOCKS = new Set(["paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "quote", "callout", "code", "toggle", "to_do"]);
+
   function renderBlock(block, numIndex) {
     const el = document.createElement("div");
     el.className = "blk" + (block.type === "to_do" && block.checked ? " done" : "");
     el.dataset.type = block.type;
+    if (block.id) el.dataset.id = block.id;
     if (block.level > 1) el.style.paddingLeft = ((block.level - 1) * 12) + "px";
     if (block.type === "numbered_list_item") el.dataset.index = String(numIndex);
-    el.textContent = block.type === "divider" ? "" : (block.text || "");
+
+    if (block.type === "to_do") {
+      const box = document.createElement("span");
+      box.className = "bcheck";
+      box.textContent = block.checked ? "☑" : "☐";
+      box.title = "勾选 / 取消";
+      box.addEventListener("click", e => { e.stopPropagation(); toggleTodo(el, block); });
+      el.appendChild(box);
+    }
+
+    const txt = document.createElement("span");
+    txt.className = "btxt";
+    txt.textContent = block.type === "divider" ? "" : (block.text || "");
+    el.appendChild(txt);
+
+    if (EDITABLE_BLOCKS.has(block.type) && block.id) {
+      txt.addEventListener("click", e => {
+        e.stopPropagation();
+        startEdit(el, block, txt);
+      });
+    }
+
+    const del = document.createElement("button");
+    del.className = "bdel";
+    del.textContent = "×";
+    del.title = "删除这一块（移到回收站）";
+    del.addEventListener("click", e => { e.stopPropagation(); removeBlock(el, block); });
+    el.appendChild(del);
+
+    block._el = el;
+    block._txt = txt;
     return el;
+  }
+
+  /* 就地编辑：Enter 保存 / Shift+Enter 换行 / Esc 取消 / 失焦保存 */
+  function startEdit(el, block, txt) {
+    if (el.classList.contains("saving") || txt.isContentEditable) return;
+    const before = block.text || "";
+    txt.contentEditable = "true";
+    txt.classList.add("editing");
+    txt.focus();
+    const range = document.createRange();
+    range.selectNodeContents(txt);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    let done = false;
+    const finish = async save => {
+      if (done) return;
+      done = true;
+      txt.removeEventListener("keydown", onKey);
+      txt.removeEventListener("blur", onBlur);
+      txt.contentEditable = "false";
+      txt.classList.remove("editing");
+      const value = txt.innerText.replace(/\n$/, "");
+      if (!save || value === before) { txt.textContent = before; return; }
+      el.classList.add("saving");
+      const api = bridge();
+      const res = api ? await api.update_block_text(block.id, value) : { ok: false, error: "预览模式" };
+      el.classList.remove("saving");
+      if (res && res.ok) {
+        block.text = value;
+        txt.textContent = value;
+      } else {
+        txt.textContent = before;
+        alert("保存失败：" + ((res && res.error) || "未知错误"));
+      }
+    };
+    const onKey = ev => {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault(); ev.stopPropagation(); finish(true);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault(); ev.stopPropagation(); finish(false);
+      } else {
+        ev.stopPropagation();     // 别让全局快捷键（Delete/↑↓/Enter）插手编辑
+      }
+    };
+    const onBlur = () => finish(true);
+    txt.addEventListener("keydown", onKey);
+    txt.addEventListener("blur", onBlur);
+  }
+
+  async function toggleTodo(el, block) {
+    if (el.classList.contains("saving")) return;
+    const next = !block.checked;
+    el.classList.add("saving");
+    const api = bridge();
+    const res = api ? await api.set_todo_checked(block.id, next) : { ok: false, error: "预览模式" };
+    el.classList.remove("saving");
+    if (res && res.ok) {
+      block.checked = next;
+      el.classList.toggle("done", next);
+      const box = el.querySelector(".bcheck");
+      if (box) box.textContent = next ? "☑" : "☐";
+    } else {
+      alert("勾选失败：" + ((res && res.error) || "未知错误"));
+    }
+  }
+
+  async function removeBlock(el, block) {
+    if (!confirm("删除这一块？会移入 Notion 回收站。")) return;
+    el.classList.add("saving");
+    const api = bridge();
+    const res = api ? await api.delete_block(block.id) : { ok: false, error: "预览模式" };
+    if (res && res.ok) {
+      const idx = currentBlocks.indexOf(block);
+      if (idx >= 0) currentBlocks.splice(idx, 1);
+      el.remove();
+      if (!dContent.querySelector(".blk")) renderContent({ blocks: [] });
+    } else {
+      el.classList.remove("saving");
+      alert("删除失败：" + ((res && res.error) || "未知错误"));
+    }
+  }
+
+  async function addParagraph() {
+    if (!detailTask) return;
+    const api = bridge();
+    if (!api) return;
+    const btn = dContent.querySelector(".dadd");
+    if (btn) btn.disabled = true;
+    const res = await api.append_paragraph(detailTask.id, "");
+    if (btn) btn.disabled = false;
+    if (!res || !res.ok) {
+      alert("添加失败：" + ((res && res.error) || "未知错误"));
+      return;
+    }
+    const block = { id: res.block_id, type: "paragraph", text: "", checked: false, lang: "", level: 1 };
+    currentBlocks.push(block);
+    const el = renderBlock(block, 1);
+    const addBtn = dContent.querySelector(".dadd");
+    dContent.insertBefore(el, addBtn || null);
+    startEdit(el, block, block._txt);
   }
 
   function renderContent(res) {
     contentSeq += 1;                      // 渲染完成，作废挂起的骨架
     const blocks = (res && res.blocks) || [];
+    currentBlocks = blocks;
     dContent.innerHTML = "";
     if (!blocks.length) {
       const empty = document.createElement("div");
@@ -2240,9 +2403,15 @@
         dContent.appendChild(tip);
       }
     }
+    const add = document.createElement("button");
+    add.className = "dadd";
+    add.textContent = "＋ 添加一段";
+    add.addEventListener("click", e => { e.stopPropagation(); addParagraph(); });
+    dContent.appendChild(add);
+
     const note = document.createElement("div");
     note.className = "dnote";
-    note.textContent = "只读 · 在 Notion 编辑";
+    note.textContent = "改动即时写回 Notion · 行内格式会合并成纯文本";
     dContent.appendChild(note);
   }
 
