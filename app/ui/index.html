@@ -1404,6 +1404,8 @@
     if (!api || !api.reload_data) { scrollToNow(true); return; }
     btn.classList.add("spinning");
     try {
+      // 刷新保持当前视口中线时刻；只有首次加载才居中到「此刻」
+      const centerTs = tsAtPoint(scroll.getBoundingClientRect().top + scroll.clientHeight / 2);
       const res = await api.reload_data();
       if (res && res.data) {
         tasks.length = 0;
@@ -1412,7 +1414,8 @@
         undated.push(...(res.data.undated || []));
         if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
         renderTimeline();
-        scrollToNow(true);
+        scroll.scrollTop = Math.max(
+          0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
         if (res.error) console.warn("刷新回落：", res.error);
       } else {
         alert("刷新失败：" + ((res && res.error) || "未知错误"));
