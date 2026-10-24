@@ -488,11 +488,12 @@ def fit_to_monitor(hwnd: int, point: tuple[int, int] | None = None) -> tuple[int
     return x, top, x + width, bottom
 
 
-def fit_to_screen(hwnd: int) -> tuple[int, int, int, int]:
+def fit_to_screen(hwnd: int, *, show: bool = True) -> tuple[int, int, int, int]:
     """按物理像素把窗口钉到右边缘、整屏高。
 
     pywebview 的 x/y/width/height 会各自再乘一次 DPI，还对高度做了工作区裁剪，
     算不准；这里直接用 SetWindowPos 覆盖成实测值，宽度沿用创建后的实际宽度。
+    show=False 时只改位置尺寸、不激活也不显示（隐藏启动用）。
     """
     rect = wintypes.RECT()
     user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect))
@@ -500,8 +501,9 @@ def fit_to_screen(hwnd: int) -> tuple[int, int, int, int]:
     screen_w = user32.GetSystemMetrics(0)
     screen_h = user32.GetSystemMetrics(1)
     left = max(0, screen_w - width)
+    flags = 0x0010 | (SWP_SHOWWINDOW if show else 0)   # 0x10 = SWP_NOACTIVATE
     _set_window_pos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), left, 0,
-                    width, screen_h, SWP_SHOWWINDOW)
+                    width, screen_h, flags)
     return left, 0, left + width, screen_h
 
 
@@ -639,7 +641,7 @@ def set_autostart(enable: bool) -> str:
             exe = Path(sys.executable)
             pythonw = exe.with_name("pythonw.exe")
             runner = pythonw if pythonw.exists() else exe
-            command = f'"{runner}" "{ROOT / "main.py"}"'
+            command = f'"{runner}" "{ROOT / "main.py"}" --hidden'
             winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
             return f"已写入自启：{command}"
         try:
@@ -1070,7 +1072,9 @@ def main() -> None:
     parser.add_argument("--autostart", choices=("on", "off"))
     parser.add_argument("--no-blur", action="store_true")
     parser.add_argument("--keep-open", action="store_true")
+    parser.add_argument("--hidden", action="store_true", help="启动时不显示窗口（自启用）")
     args = parser.parse_args()
+    state["visible"] = not args.hidden   # 隐藏启动时，第一次唤出应该是"显示"而不是"隐藏"
 
     if args.autostart:
         print(set_autostart(args.autostart == "on"))
@@ -1114,6 +1118,7 @@ def main() -> None:
         resizable=False,
         shadow=False,
         easy_drag=False,
+        hidden=args.hidden,
     )
     api._window = window
     start_activation_server(window)
@@ -1123,7 +1128,7 @@ def main() -> None:
         try:
             hwnd = window.native.Handle.ToInt64()
             state["hwnd"] = hwnd
-            left, top, right, bottom = fit_to_screen(hwnd)
+            left, top, right, bottom = fit_to_screen(hwnd, show=not args.hidden)
             print(f"fit_to_screen -> ({left},{top},{right},{bottom})", flush=True)
             print(f"显示器: {list_monitors()}", flush=True)
             ok = apply_acrylic(hwnd) if not args.no_blur else False
@@ -1158,7 +1163,10 @@ def main() -> None:
         target=refresh_loop, args=(window, state.get("data_digest") or ""), daemon=True
     ).start()
 
-    print(f"{config['hotkey']} 唤出/收起，Ctrl+Alt+Q 退出", flush=True)
+    if args.hidden:
+        print("以 --hidden 启动：窗口保持隐藏，按热键或再次启动可唤出", flush=True)
+    else:
+        print(f"{config['hotkey']} 唤出/收起，Ctrl+Alt+Q 退出", flush=True)
     print("pid:", os.getpid(), flush=True)
     webview.start(gui="edgechromium", debug=False)
 
