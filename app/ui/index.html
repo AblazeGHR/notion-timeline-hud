@@ -346,8 +346,7 @@
 
   /* ---------------- 拖拽改期 ---------------- */
   body.drag-lock,
-  body.drag-lock * { user-select: none; }
-  body.drag-lock .scroll { overflow: hidden; }   /* 拖拽期间不许滚时间轴 */
+  body.drag-lock * { user-select: none; }        /* 只禁选中，滚轮/边缘滚动照常 */
   .chip.dragging {
     cursor: grabbing;
     transition: none;
@@ -882,44 +881,95 @@
   const DRAG_CLICK_PX = 4;    // 位移小于这个像素数算点击，不写
   let dragActive = false;     // 拖拽中忽略缩放，否则像素位移和分钟数会换算错
 
-  /* 位移像素 → 分钟：全天卡片按整天（1440）吸附，其余按 15 分钟 */
-  function dragMinutes(dy, allDay) {
-    if (allDay) return Math.round(dy / (PX_PER_MIN * 1440)) * 1440;
-    return Math.round((dy / PX_PER_MIN) / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
+  /* 指针位置 → 该处的时刻（含当前滚动量，滚动后依然对得上） */
+  function tsAtPoint(clientY) {
+    const rect = scroll.getBoundingClientRect();
+    return canvasStart + ((scroll.scrollTop + (clientY - rect.top)) / PX_PER_MIN) * 60000;
+  }
+
+  /* 目标时刻 → 吸附后的毫秒数：全天按整天，其余按 15 分钟 */
+  function snapMs(ms, allDay) {
+    const step = allDay ? DAY : DRAG_SNAP_MIN * 60000;
+    return Math.round(ms / step) * step;
   }
 
   /* 时间气泡：目标时刻（跨天时把日期一起给出） */
-  function tipLabel(t, key, minutes) {
-    const ts = base + t[key] * H + minutes * 60000;
+  function tipLabel(t, key, ts) {
     const d = new Date(ts);
     const day = (d.getMonth() + 1) + "-" + d.getDate();
     return t[ALL_DAY_KEY[key]] ? day + " 全天" : day + " " + hhmm(ts);
   }
 
+  const DRAG_EDGE_PX = 48;      // 进入上下这么多像素开始自动滚
+  const DRAG_SPEED_MIN = 2;     // 贴边前的速度 px/帧
+  const DRAG_SPEED_MAX = 14;    // 贴边时的速度 px/帧
+
   function startDrag(e, el, t, key) {
     const item = items[key].find(it => it.el === el);
     if (!item) return;
-    const startY = e.clientY;
-    const origTop = parseFloat(el.style.top) || item.y;
     const allDay = !!t[ALL_DAY_KEY[key]];
-    let dy = 0;
+    const startTs = base + t[key] * H;
+    const grabTs = tsAtPoint(e.clientY);   // 按下瞬间指针下的时刻
+    const origTop = parseFloat(el.style.top) || item.y;
+    const topOffset = origTop - yOf(startTs);   // 被避让顶开的那点偏移，拖动时保留
+    const startClientY = e.clientY;
+    let pointerY = e.clientY;
     let dragging = false;
+    let targetTs = startTs;
+    let raf = 0;
 
     e.preventDefault();    // 禁掉原生文本选择 / 拖影
     e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动
     dragActive = true;
-    document.body.classList.add("drag-lock");   // 拖拽期间禁选中、禁滚动
+    document.body.classList.add("drag-lock");
 
     const restore = () => {
       el.style.top = origTop + "px";
       layoutLane(key);
     };
 
+    /* 每帧都按「指针 y + scrollTop」重新算目标时刻，所以滚动不会累积误差 */
+    const updatePreview = () => {
+      targetTs = startTs + (tsAtPoint(pointerY) - grabTs);
+      el.style.top = (yOf(targetTs) + topOffset) + "px";
+      dragtip.textContent = tipLabel(t, key, startTs + snapMs(targetTs - startTs, allDay));
+      dragtip.classList.add("on");
+    };
+
+    const placeTip = ev => {
+      dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 120) + "px";
+      dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
+    };
+
+    const autoStep = () => {
+      raf = 0;
+      if (!dragging) return;
+      const rect = scroll.getBoundingClientRect();
+      let speed = 0;
+      if (pointerY < rect.top + DRAG_EDGE_PX) {
+        const k = Math.min(1, (rect.top + DRAG_EDGE_PX - pointerY) / DRAG_EDGE_PX);
+        speed = -(DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k);
+      } else if (pointerY > rect.bottom - DRAG_EDGE_PX) {
+        const k = Math.min(1, (pointerY - (rect.bottom - DRAG_EDGE_PX)) / DRAG_EDGE_PX);
+        speed = DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * k;
+      }
+      if (speed) {
+        const before = scroll.scrollTop;
+        scroll.scrollTop = before + speed;
+        if (scroll.scrollTop !== before) updatePreview();
+      }
+      raf = requestAnimationFrame(autoStep);
+    };
+
+    const onScroll = () => { if (dragging) updatePreview(); };
+
     const detach = () => {
       dragActive = false;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("blur", onCancel);
+      scroll.removeEventListener("scroll", onScroll);
       document.body.classList.remove("drag-lock");
       dragtip.classList.remove("on");
       el.classList.remove("dragging");
@@ -932,17 +982,15 @@
     };
 
     const onMove = ev => {
-      dy = ev.clientY - startY;
+      pointerY = ev.clientY;
       if (!dragging) {
-        if (Math.abs(dy) < DRAG_CLICK_PX) return;
+        if (Math.abs(ev.clientY - startClientY) < DRAG_CLICK_PX) return;
         dragging = true;
         el.classList.add("dragging");
+        raf = requestAnimationFrame(autoStep);
       }
-      el.style.top = (origTop + dy) + "px";
-      dragtip.textContent = tipLabel(t, key, dragMinutes(dy, allDay));
-      dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 120) + "px";
-      dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
-      dragtip.classList.add("on");
+      updatePreview();
+      placeTip(ev);
     };
 
     const onUp = async () => {
@@ -950,7 +998,7 @@
       if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
       el._dragEndedAt = Date.now();
 
-      const minutes = dragMinutes(dy, allDay);
+      const minutes = snapMs(targetTs - startTs, allDay) / 60000;
       const api = bridge();
       if (!minutes || !api) {
         restore();
@@ -982,6 +1030,7 @@
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     window.addEventListener("blur", onCancel);
+    scroll.addEventListener("scroll", onScroll, { passive: true });
   }
 
   function mountChip(t, key) {
