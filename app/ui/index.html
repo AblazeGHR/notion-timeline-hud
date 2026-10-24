@@ -1083,7 +1083,7 @@
 
   const DRAG_EDGE_PX = 48;      // 进入上下这么多像素开始自动滚
   const DRAG_SPEED_MIN = 2;     // 贴边前的速度 px/帧
-  const DRAG_SPEED_MAX = 14;    // 贴边时的速度 px/帧
+  const DRAG_SPEED_MAX = 8;     // 贴边时的速度 px/帧（原来 14，冲得太快）
 
   function startDrag(e, el, t, key) {
     const item = items[key].find(it => it.el === el);
@@ -1144,9 +1144,19 @@
 
     const onScroll = () => { if (dragging) updatePreview(); };
 
+    /* 拖拽中按 Esc：取消并归位，不发请求 */
+    const onKey = ev => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      detach();
+      restore();
+    };
+
     const detach = () => {
       dragActive = false;
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("blur", onCancel);
@@ -1208,6 +1218,7 @@
       layoutLane(key);
     };
 
+    window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     window.addEventListener("blur", onCancel);
