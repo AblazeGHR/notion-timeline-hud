@@ -1429,6 +1429,9 @@
   }
 
   function applyFontScale(value) {
+    // 先记下视口中线对应的时刻，改完字号再滚回同一时刻
+    const centerTs = tsAtPoint(scroll.getBoundingClientRect().top + scroll.clientHeight / 2);
+
     FONT_SCALE = clampFont(value);
     document.documentElement.style.setProperty("--font-scale", String(FONT_SCALE));
     updateFontLabel();
@@ -1437,6 +1440,9 @@
       items[key].forEach(item => { item.h = item.el.offsetHeight; });
       layoutLane(key);
     });
+
+    const anchor = ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2;
+    scroll.scrollTop = Math.max(0, anchor);
     return FONT_SCALE;
   }
 
