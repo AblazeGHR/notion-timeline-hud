@@ -454,12 +454,15 @@
   .hour-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
   .hourline {
     position: absolute; left: var(--gutter); right: 6px; height: 1px;
-    background: rgba(255,255,255,.045);     /* 比日线淡一半 */
+    background: rgba(255,255,255,.22);      /* 仍比日线淡，但能看清 */
   }
   .hourlabel {
-    position: absolute; left: 0; width: calc(var(--gutter) - 8px);
-    text-align: right; font-size: 8.5px; color: var(--faint);
-    opacity: .6; transform: translateY(-50%);
+    position: absolute; right: calc(100% - var(--gutter) + 6px);
+    font-size: 9.5px; color: #A8AAB8;
+    line-height: 1.15; white-space: nowrap;
+    padding: 1px 4px; border-radius: 4px;
+    background: rgba(0,0,0,.35);            /* 整点标签垫一层，压住穿过的线条 */
+    transform: translateY(-50%);
     font-variant-numeric: tabular-nums;
   }
 
