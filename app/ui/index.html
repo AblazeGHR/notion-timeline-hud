@@ -2248,12 +2248,7 @@
     const phH = endMin ? Math.max(34, (endMin - startMin) * PX_PER_MIN) : 34;
     el.style.top = phTop + "px";
     if (endMin) el.style.height = phH + "px";
-    // 和已有卡片重叠时先向右错开 8px（不改真实时间）
-    const overlap = items[key].some(it => {
-      if (!it.el.isConnected) return false;
-      return phTop < it.y + it.h - 2 && phTop + phH > it.y + 2;
-    });
-    el.style.left = overlap ? "15px" : "7px";
+    el.style.left = "7px";
 
     const time = document.createElement("div");
     time.className = "phtime";
@@ -2272,6 +2267,14 @@
 
     el.append(time, input, hint);
     lanes[key].appendChild(el);
+    // 用「已渲染卡片的真实 rect」判重叠（避让会把卡片顶下去，真实 y 不准），同轨才判
+    const phRect = el.getBoundingClientRect();
+    const clash = items[key].some(it => {
+      if (!it.el.isConnected) return false;
+      const r = it.el.getBoundingClientRect();
+      return phRect.top < r.bottom - 2 && phRect.bottom > r.top + 2;
+    });
+    if (clash) el.style.left = "15px";     // 向右错开 8px，不改真实时间
     phCard = el;
     requestAnimationFrame(() => input.focus());
 
