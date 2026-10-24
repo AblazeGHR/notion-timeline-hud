@@ -203,12 +203,17 @@ def enable_transparency(hwnd: int, form: object) -> str:
     return ", ".join(notes)
 
 
-def apply_acrylic(hwnd: int) -> bool:
+def tint_color(alpha: int) -> int:
+    """AABBGGRR：alpha 是 tint 浓度，RGB 固定为 0x1A1B22。"""
+    return ((alpha & 0xFF) << 24) | 0x1A1B22
+
+
+def apply_acrylic(hwnd: int, alpha: int = 0x60) -> bool:
     """4 = ACCENT_ENABLE_ACRYLICBLURBEHIND，颜色按 AABBGGRR。
 
-    0x601A1B22：alpha 0x60（37.5%），比 0x40 更压得住亮壁纸，又不至于糊成一块。
+    默认 alpha 0x60（37.5%）对应面板 opacity 0.82；滑杆会按比例改它。
     """
-    accent = ACCENTPOLICY(4, 0, 0x601A1B22, 0)
+    accent = ACCENTPOLICY(4, 0, tint_color(alpha), 0)
     data = WINCOMPATTRDATA(
         19, ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p), ctypes.sizeof(accent)
     )
@@ -766,6 +771,21 @@ class Api:
             state["visible"] = False
             schedule_memory_trim()
 
+    def set_panel_opacity(self, value: float) -> dict:
+        """面板透明度滑块 → 重算亚克力 tint（0x18~0x90），重新应用合成属性。"""
+        try:
+            opacity = float(value)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "opacity 必须是数字"}
+        opacity = max(0.15, min(0.95, opacity))
+        alpha = max(0x18, min(0x90, int(0x60 * opacity / 0.82)))
+        hwnd = state["hwnd"]
+        if not hwnd:
+            return {"ok": True, "alpha": alpha, "applied": False}
+        ok = apply_acrylic(hwnd, alpha)
+        print(f"亚克力 tint -> 0x{alpha:02X}（opacity {opacity:.2f}）", flush=True)
+        return {"ok": ok, "alpha": alpha, "applied": True}
+
     def start_drag(self) -> None:
         """拖动窗口：ReleaseCapture 后把“标题栏按下”转给系统，由 Windows 接管移动。"""
         hwnd = state["hwnd"]
@@ -822,10 +842,11 @@ class Api:
         return {"ok": True, "config": updated}
 
     def apply_visuals(self) -> dict:
-        """窗口加载完刷一遍透明度 / 主题。"""
+        """窗口加载完刷一遍透明度 / 主题（亚克力 tint 也跟着配置走）。"""
         config = state["config"]
         self.apply_opacity(config["opacity"])
         self.apply_theme(config["theme"])
+        self.set_panel_opacity(config["opacity"])
         return dict(config)
 
     def apply_opacity(self, opacity: float) -> None:

@@ -9,6 +9,7 @@
     /* 面板底色拆成 rgb + alpha，透明度滑杆只改 --panel-alpha，不动配色 */
     --panel-rgb: 16, 17, 22;
     --panel-alpha: 0.82;
+    --shade-alpha: calc(var(--panel-alpha) * 0.9);   /* 遮罩随透明度滑杆一起变 */
     --font-scale: 1;          /* 条目字号缩放，和时间轴密度无关 */
     --panel-line: rgba(255, 255, 255, 0.09);
     --text: #ECECF1;
@@ -109,10 +110,8 @@
     display: flex;
     flex-direction: column;
     border-radius: var(--radius);
-    /* 纵向渐变遮罩：压住中部正文区，保证任意壁纸下正文都够看 */
-    background:
-      linear-gradient(180deg, rgba(0,0,0,.22), rgba(0,0,0,.10) 50%, rgba(0,0,0,.16)),
-      rgba(var(--panel-rgb), var(--panel-alpha));
+    isolation: isolate;          /* 让 -1 层的遮罩待在内容下面 */
+    background: rgba(var(--panel-rgb), var(--panel-alpha));
     border: 1px solid var(--panel-line);
     backdrop-filter: blur(26px) saturate(165%) brightness(1.06);
     -webkit-backdrop-filter: blur(26px) saturate(165%) brightness(1.06);
@@ -129,6 +128,26 @@
   }
 
   /* ---------------- 顶栏 ---------------- */
+  /* 纵向渐变遮罩：独立一层，透明度低时不会把面板压死 */
+  .panel-shade {
+    position: absolute; inset: 0; z-index: -1;
+    pointer-events: none; border-radius: inherit;
+    background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, var(--shade-alpha)),
+      rgba(0, 0, 0, calc(var(--shade-alpha) * 0.45)) 50%,
+      rgba(0, 0, 0, calc(var(--shade-alpha) * 0.73))
+    );
+  }
+  body.theme-light .panel-shade {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, var(--shade-alpha)),
+      rgba(255, 255, 255, calc(var(--shade-alpha) * 0.45)) 50%,
+      rgba(255, 255, 255, calc(var(--shade-alpha) * 0.73))
+    );
+  }
+
   .topbar {
     display: flex; align-items: flex-start; justify-content: space-between;
     padding: 17px 14px 11px 18px;
@@ -780,6 +799,7 @@
 <div class="mock-tag"><span class="dot"></span>Timeline HUD · 外观稿 v2</div>
 
 <main class="panel">
+  <div class="panel-shade" aria-hidden="true"></div>
 
   <header class="topbar">
     <div>
@@ -856,7 +876,10 @@
     </div>
     <div class="srow">
       <span>面板透明度</span>
-      <input type="range" class="slider" id="opacitySlider" min="40" max="95" value="82">
+      <span class="density">
+        <input type="range" class="slider" id="opacitySlider" min="15" max="95" step="1" value="82">
+        <b id="opacityValue">82%</b>
+      </span>
     </div>
     <div class="srow">
       <span>时间轴密度</span>
@@ -1586,23 +1609,41 @@
     slider.style.background =
       "linear-gradient(90deg, var(--accent) " + percent + "%, rgba(255,255,255,.14) " + percent + "%)";
   }
-  paintSlider(slider.value);
 
-  slider.addEventListener("input", () => paintSlider(slider.value));
-  slider.addEventListener("change", async () => {
-    const value = Number(slider.value);
-    const previous = Number(slider.dataset.saved || 82);
+  /* 滑块 → --panel-alpha（遮罩层跟着变）+ 百分比文案 */
+  function applyOpacity(percent) {
+    const value = Math.max(15, Math.min(95, Math.round(Number(percent) || 82)));
+    const alpha = value / 100;
+    document.documentElement.style.setProperty("--panel-alpha", alpha.toFixed(2));
+    const label = document.getElementById("opacityValue");
+    if (label) label.textContent = value + "%";
+    if (String(slider.value) !== String(value)) slider.value = String(value);
+    paintSlider(value);
+    return alpha;
+  }
+  applyOpacity(slider.value);
+
+  let opacityTimer = null;
+  slider.addEventListener("input", () => {
+    applyOpacity(slider.value);
+    clearTimeout(opacityTimer);
+    opacityTimer = setTimeout(saveOpacity, 150);   // 亚克力重设比较贵，压一压
+  });
+
+  async function saveOpacity() {
+    const alpha = Number(slider.value) / 100;
+    const previous = Number(slider.dataset.saved || 82) / 100;
     const api = bridge();
     if (!api) return;
-    const res = await api.set_config({ opacity: value / 100 });
+    if (api.set_panel_opacity) api.set_panel_opacity(alpha);   // 亚克力 tint 跟着走
+    const res = await api.set_config({ opacity: alpha });
     if (res && res.ok) {
-      slider.dataset.saved = String(value);
+      slider.dataset.saved = String(Math.round(alpha * 100));
     } else {
-      slider.value = String(previous);
-      paintSlider(previous);
+      applyOpacity(previous * 100);
       alert("透明度没保存上：" + ((res && res.error) || "未知错误"));
     }
-  });
+  }
 
   const scaleSlider = document.getElementById("scaleSlider");
   let scaleSaveTimer = null;
@@ -1717,7 +1758,7 @@
     const percent = Math.round(Number(cfg.opacity) * 100);
     slider.value = String(percent);
     slider.dataset.saved = String(percent);
-    paintSlider(percent);
+    applyOpacity(percent);
     themeSeg.querySelectorAll("button").forEach(b =>
       b.classList.toggle("on", b.dataset.theme === cfg.theme));
     let autostartOn = !!cfg.autostart;
