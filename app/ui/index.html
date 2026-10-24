@@ -592,7 +592,18 @@
   body.theme-light .quitbtn { color: #C4384F; }
   .sfoot { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.055);
            font-size: 9.5px; color: var(--faint); display: flex; justify-content: space-between; }
-  .sfoot .ok { color: #35CE94; }
+  .drawer-head .sync {
+    margin-left: auto; font-size: 9.5px; color: #35CE94;
+    pointer-events: none; font-variant-numeric: tabular-nums;
+  }
+  .drawer-head .sync.offline { color: #F0B45A; }
+  .drawer-head .sync.error { color: #FF8FA3; }
+  .drawer-head .retry {
+    display: none; height: 18px; padding: 0 7px; border-radius: 5px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06);
+    color: var(--text); font-family: inherit; font-size: 9.5px;
+  }
+  .drawer-head.show-retry .retry { display: inline-block; }
 
   /* ---------------- 浅色主题（只换配色，不动布局） ---------------- */
   body.theme-light .panel {
@@ -811,6 +822,8 @@
   <footer class="drawer" id="drawer">
     <div class="drawer-head" id="drawerHead">
       <span>待安排</span><b class="count" id="undatedCount">4</b>
+      <span class="sync" id="syncState">已同步</span>
+      <button class="retry" id="btnRetry">重试</button>
       <svg class="chev" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg>
     </div>
     <div class="drawer-body" id="drawerBody"></div>
@@ -854,7 +867,7 @@
     </div>
     <div class="sfoot">
       <span>Notion · 日程与任务数据库</span>
-      <span class="ok">已同步</span>
+
     </div>
   </div>
 
@@ -895,6 +908,7 @@
   </div>
 </div>
 
+<script>window.__STATUS__ = null;</script>
 <script>window.__CFG__ = null;</script>
 <script>window.__DATA__ = null;</script>
 <script>
@@ -1687,6 +1701,7 @@
     }
     if (cfg.font_scale != null) applyFontScale(cfg.font_scale);
   }
+  if (window.__STATUS__) applySyncStatus(window.__STATUS__);
   if (window.pywebview) syncConfig();
   else window.addEventListener("pywebviewready", syncConfig);
 
@@ -2135,6 +2150,42 @@
     const api = bridge();
     if (api) api.open_task(detailTask.id);
   });
+  /* ---------- 数据源状态（在线 / 离线缓存 / 失败） ---------- */
+  function applySyncStatus(info) {
+    const el = document.getElementById("syncState");
+    const foot = document.getElementById("drawerHead");
+    if (!el || !foot) return;
+    const source = (info && info.source) || "api";
+    el.classList.remove("offline", "error");
+    foot.classList.remove("show-retry");
+    if (source === "cache") {
+      el.textContent = "离线 · 缓存";
+      el.classList.add("offline");
+    } else if (source === "none") {
+      el.textContent = "无法读取数据";
+      el.classList.add("error");
+      foot.classList.add("show-retry");
+    } else {
+      el.textContent = "已同步";
+    }
+    el.title = info && info.error ? String(info.error).slice(0, 200) : "";
+  }
+
+  document.getElementById("btnRetry").addEventListener("click", async e => {
+    e.stopPropagation();
+    const api = bridge();
+    if (!api) return;
+    const el = document.getElementById("syncState");
+    if (el) el.textContent = "正在重试…";
+    const res = await api.reload_data();
+    if (res && res.data) {
+      window.__hud.setData(res.data);
+      applySyncStatus({ source: res.source || (res.error ? "cache" : "api"), error: res.error });
+    } else {
+      applySyncStatus({ source: "none", error: (res && res.error) || "未知错误" });
+    }
+  });
+
   document.getElementById("dClose").addEventListener("click", closeDetail);
   document.addEventListener("click", e => {
     if (!detail.classList.contains("open")) return;
@@ -2167,6 +2218,8 @@
         el.classList.toggle("done", status === "done");
       });
     },
+    setStatus(info) { applySyncStatus(info); return true; },
+
     /* 后台刷新推过来的整包数据：保持视口中心时刻与当前轨道 */
     setData(data) {
       if (!data || !Array.isArray(data.tasks)) return false;

@@ -925,7 +925,9 @@ def render_html() -> str:
     config_payload = json.dumps(state["config"], ensure_ascii=False).replace("</", "<\\/")
     state["data_digest"] = data_digest(data)
     state["data_source"] = source
+    status_payload = json.dumps({"source": source, "error": (error or "")[:200]}, ensure_ascii=False)
     html = template.replace("window.__DATA__ = null;", f"window.__DATA__ = {payload};")
+    html = html.replace("window.__STATUS__ = null;", f"window.__STATUS__ = {status_payload};")
     # 密度在首帧就用配置值渲染，避免加载完再跳一下
     return html.replace("window.__CFG__ = null;", f"window.__CFG__ = {config_payload};")
 
