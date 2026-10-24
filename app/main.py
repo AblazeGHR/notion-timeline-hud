@@ -144,9 +144,9 @@ class WINCOMPATTRDATA(ctypes.Structure):
 def apply_acrylic(hwnd: int) -> bool:
     """4 = ACCENT_ENABLE_ACRYLICBLURBEHIND，颜色按 AABBGGRR。
 
-    0x401A1B22：alpha 0x40（25%），比原来的 0xD0 淡，透出更多桌面内容。
+    0x601A1B22：alpha 0x60（37.5%），比 0x40 更压得住亮壁纸，又不至于糊成一块。
     """
-    accent = ACCENTPOLICY(4, 0, 0x401A1B22, 0)
+    accent = ACCENTPOLICY(4, 0, 0x601A1B22, 0)
     data = WINCOMPATTRDATA(
         19, ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p), ctypes.sizeof(accent)
     )

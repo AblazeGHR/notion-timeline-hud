@@ -14,7 +14,12 @@ class RECT(ctypes.Structure):
                 ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
 
-hwnd = user32.FindWindowW(None, "Timeline HUD")
+# 同名窗口可能有多个（残留实例），优先用 --hwnd 指定
+hwnd = 0
+if "--hwnd" in sys.argv:
+    hwnd = int(sys.argv[sys.argv.index("--hwnd") + 1])
+if not hwnd:
+    hwnd = user32.FindWindowW(None, "Timeline HUD")
 if not hwnd:
     print("window not found")
     raise SystemExit(1)
@@ -25,6 +30,6 @@ box = (rect.left, rect.top, rect.right, rect.bottom)
 print("hwnd:", hwnd, "rect:", box)
 
 img = ImageGrab.grab(bbox=box, all_screens=True)
-out = sys.argv[1] if len(sys.argv) > 1 else "spike/window.png"
+out = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "spike/window.png"
 img.save(out)
 print("saved:", out, img.size)

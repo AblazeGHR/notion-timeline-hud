@@ -8,7 +8,7 @@
   :root {
     /* 面板底色拆成 rgb + alpha，透明度滑杆只改 --panel-alpha，不动配色 */
     --panel-rgb: 16, 17, 22;
-    --panel-alpha: 0.66;
+    --panel-alpha: 0.82;
     --font-scale: 1;          /* 条目字号缩放，和时间轴密度无关 */
     --panel-line: rgba(255, 255, 255, 0.09);
     --text: #ECECF1;
@@ -109,7 +109,10 @@
     display: flex;
     flex-direction: column;
     border-radius: var(--radius);
-    background: rgba(var(--panel-rgb), var(--panel-alpha));
+    /* 纵向渐变遮罩：压住中部正文区，保证任意壁纸下正文都够看 */
+    background:
+      linear-gradient(180deg, rgba(0,0,0,.22), rgba(0,0,0,.10) 50%, rgba(0,0,0,.16)),
+      rgba(var(--panel-rgb), var(--panel-alpha));
     border: 1px solid var(--panel-line);
     backdrop-filter: blur(26px) saturate(165%) brightness(1.06);
     -webkit-backdrop-filter: blur(26px) saturate(165%) brightness(1.06);
@@ -574,6 +577,11 @@
   .sfoot .ok { color: #35CE94; }
 
   /* ---------------- 浅色主题（只换配色，不动布局） ---------------- */
+  body.theme-light .panel {
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.16) 50%, rgba(255,255,255,.26)),
+      rgba(var(--panel-rgb), var(--panel-alpha));
+  }
   body.theme-light {
     --panel-rgb: 246, 246, 250;
     --panel-line: rgba(0, 0, 0, 0.09);
@@ -797,7 +805,7 @@
     </div>
     <div class="srow">
       <span>面板透明度</span>
-      <input type="range" class="slider" id="opacitySlider" min="40" max="95" value="66">
+      <input type="range" class="slider" id="opacitySlider" min="40" max="95" value="82">
     </div>
     <div class="srow">
       <span>时间轴密度</span>
@@ -1494,7 +1502,7 @@
   slider.addEventListener("input", () => paintSlider(slider.value));
   slider.addEventListener("change", async () => {
     const value = Number(slider.value);
-    const previous = Number(slider.dataset.saved || 66);
+    const previous = Number(slider.dataset.saved || 82);
     const api = bridge();
     if (!api) return;
     const res = await api.set_config({ opacity: value / 100 });

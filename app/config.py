@@ -16,7 +16,7 @@ CONFIG_PATH = ROOT / "config.json"
 
 DEFAULTS: dict[str, Any] = {
     "hotkey": "Ctrl+Alt+Space",
-    "opacity": 0.66,
+    "opacity": 0.82,
     "timeline_scale": 14.0,
     "font_scale": 1.0,
     "theme": "dark",
