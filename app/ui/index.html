@@ -1982,6 +1982,8 @@
         top = r.bottom + 8;                   // 两边都挤 → 放到卡片下面
       }
     }
+    // 左侧 54px 是日期刻度列，弹窗别盖住它
+    if (left < 54) left = Math.min(54, window.innerWidth - w - 8);
     top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
     detail.style.left = left + "px";
     detail.style.top = top + "px";
