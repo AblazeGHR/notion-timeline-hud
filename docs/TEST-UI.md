@@ -13,6 +13,9 @@ E:/software/miniforge/python.exe d:/project/notion_plugin/app/main.py
 ## A. 窗口呈现
 
 - [ ] **A1 半透明 / 亚克力**
+  *2026-10-24 正式入口复核：`transparency -> BackColor=Black, backdrop hr=0/0`；
+  窗口 1779,0,2560,1600；面板中心 luma 21.1（透出真实壁纸，不是纯黑）；四角非黑块。
+  之前"整块发灰"的根因是 WinForms Form 的 #F0F0F0 底色挡住合成层，已在 enable_transparency 修掉。*
   背后应是**模糊**的桌面或窗口，不是纯黑、不是纯色块；面板是**直角**，四角没有黑块。
   *失败特征：整体发黑（亚克力 tint 太重）、边缘一圈硬黑边、四角有圆角留下的黑三角。*
   *要更暗：把「面板透明度」调高；要更透：调低。*
