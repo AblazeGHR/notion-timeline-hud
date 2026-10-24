@@ -139,14 +139,6 @@
       rgba(0, 0, 0, calc(var(--shade-alpha) * 0.73))
     );
   }
-  body.theme-light .panel-shade {
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, var(--shade-alpha)),
-      rgba(255, 255, 255, calc(var(--shade-alpha) * 0.45)) 50%,
-      rgba(255, 255, 255, calc(var(--shade-alpha) * 0.73))
-    );
-  }
 
   .topbar {
     display: flex; align-items: flex-start; justify-content: space-between;
@@ -241,7 +233,6 @@
   }
   .phcard .phin::placeholder { color: var(--faint); }
   .phcard .phhint { font-size: 9px; color: var(--faint); }
-  body.theme-light .phcard { background: rgba(124,140,255,.12); }
 
   /* ---------------- 搜索 ---------------- */
   .search {
@@ -264,8 +255,6 @@
     padding: 2px 5px; border-radius: 5px;
   }
   .chip.hide, .ditem.hide { display: none; }
-  body.theme-light .search { background: rgba(0,0,0,.05); border-color: rgba(124,140,255,.4); }
-  body.theme-light .search input { color: #1B1C22; }
 
   /* ---------------- 时间线 ---------------- */
   .timeline { position: relative; flex: 1; min-height: 0; overflow: hidden; }
@@ -473,7 +462,6 @@
     opacity: .6; transform: translateY(-50%);
     font-variant-numeric: tabular-nums;
   }
-  body.theme-light .hourline { background: rgba(0,0,0,.06); }
 
   /* ---------------- 拖拽改期 ---------------- */
   body.drag-lock,
@@ -556,7 +544,6 @@
     font-size: 13px; line-height: 1;
   }
   .intro button:hover { background: rgba(255,255,255,.12); color: var(--text); }
-  body.theme-light .intro { color: #3A3B44; background: rgba(124,140,255,.16); }
 
   /* ---------------- 待安排 ---------------- */
   .drawer {
@@ -699,8 +686,6 @@
   }
   .quitbtn .pw { font-size: 12px; line-height: 1; }
   .quitbtn:hover { background: rgba(255,107,138,.24); }
-  body.theme-light .quit-row { background: rgba(252,252,254,.99); border-top-color: rgba(0,0,0,.09); }
-  body.theme-light .quitbtn { color: #C4384F; }
   .hotkey-row { cursor: pointer; }
   .hotkey-row:hover .keys kbd { border-color: rgba(124,140,255,.5); color: #DCE0FF; }
   .hotkey-row .capture-text {
@@ -728,41 +713,6 @@
   }
   .drawer-head.show-retry .retry { display: inline-block; }
 
-  /* ---------------- 浅色主题（只换配色，不动布局） ---------------- */
-  body.theme-light .panel {
-    background:
-      linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.16) 50%, rgba(255,255,255,.26)),
-      rgba(var(--panel-rgb), var(--panel-alpha));
-  }
-  body.theme-light {
-    --panel-rgb: 246, 246, 250;
-    --panel-line: rgba(0, 0, 0, 0.09);
-    --text: #1B1C22;
-    --dim: #5A5C68;
-    --faint: #8A8C99;
-  }
-  body.theme-light .chip { background: rgba(0,0,0,.045); border-color: rgba(0,0,0,.08); }
-  body.theme-light .chip .t { color: #26272E; }
-  body.theme-light .chip .row2 { color: #7A7C8A; }
-  body.theme-light .chip .row2 .tag { color: #6C6E7C; background: rgba(0,0,0,.06); }
-  body.theme-light .daylabel { color: #8A8C99; }
-  body.theme-light .dayline { background: linear-gradient(90deg, rgba(0,0,0,.12), rgba(0,0,0,.03) 62%, transparent); }
-  body.theme-light .trackbar { background: linear-gradient(rgba(248,248,251,.95), rgba(248,248,251,.6) 74%, transparent); }
-  body.theme-light .track { color: #8A8C99; }
-  body.theme-light .quickadd { background: rgba(0,0,0,.05); border-color: rgba(0,0,0,.07); }
-  body.theme-light .quickadd input { color: #1B1C22; }
-  body.theme-light .drawer { background: rgba(250,250,253,.98); }
-  body.theme-light .drawer-head { color: #5A5C68; }
-  body.theme-light .ditem { color: #2B2C33; }
-  body.theme-light .settings { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.1); }
-  body.theme-light .settings h4 { color: #8A8C99; }
-  body.theme-light .srow { color: #3A3B44; }
-  body.theme-light .srow + .srow { border-top-color: rgba(0,0,0,.06); }
-  body.theme-light .sub { color: #5A5C68; }
-  body.theme-light .sub b { color: #2B2C33; }
-  body.theme-light .ctxmenu { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.1); }
-  body.theme-light .ctxmenu button { color: #2B2C33; }
-  body.theme-light .dragtip { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.12); color: #1B1C22; }
 
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
@@ -889,7 +839,6 @@
   }
   .dadd:hover { background: rgba(255,255,255,.05); color: var(--text); }
   .dadd:disabled { opacity: .5; cursor: default; }
-  body.theme-light .dadd { border-color: rgba(0,0,0,.18); }
   .blk[data-type="quote"] { border-left: 2px solid rgba(255,255,255,.18); padding-left: 8px; color: var(--dim); }
   .blk[data-type="code"] {
     background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.07);
@@ -917,19 +866,10 @@
           background: linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.13), rgba(255,255,255,.06));
           background-size: 200% 100%; animation: skel 1.1s linear infinite; }
   @keyframes skel { from { background-position: 160% 0; } to { background-position: -40% 0; } }
-  body.theme-light .detail .dtabs button.on { background: rgba(124,140,255,.18); color: #1B1C22; }
-  body.theme-light .blk[data-type="code"] { background: rgba(0,0,0,.06); }
 
   .detail .dfoot button.primary {
     background: rgba(124,140,255,.22); border-color: rgba(124,140,255,.45); color: #EDEEF7;
   }
-  body.theme-light .detail { background: rgba(252,252,254,.98); border-color: rgba(0,0,0,.1); }
-  body.theme-light .detail .dtitle,
-  body.theme-light .detail .ddate,
-  body.theme-light .detail .dtime,
-  body.theme-light .detail .dsel { background: rgba(0,0,0,.04); border-color: rgba(0,0,0,.1); color: #1B1C22; }
-  body.theme-light .detail .dfoot button { color: #2B2C33; }
-  body.theme-light .detail .dseg button { color: #5A5C68; }
 
   /* 桌面壳模式：窗口本身就是面板，不画假桌面 */
   html:has(body.desktop) { background: transparent; }   /* 否则 html 的 #08090D 会挡住亚克力 */

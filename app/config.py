@@ -21,7 +21,6 @@ DEFAULTS: dict[str, Any] = {
     "font_scale": 1.0,
     "seen_intro": False,
     "open_in_app": True,
-    "theme": "dark",
     "hide_on_blur": False,
     "release_memory_minutes": 15,
     "refresh_seconds": 120,
@@ -128,12 +127,6 @@ def _as_refresh_seconds(value: Any) -> int:
     return int(number)
 
 
-def _as_theme(value: Any) -> str:
-    if value not in ("dark", "light"):
-        raise ValueError("theme 只能是 dark 或 light")
-    return str(value)
-
-
 def _as_minutes(value: Any) -> int:
     # pywebview 桥可能把 15 传成 15.0，整数值的浮点也收
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -159,7 +152,6 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "opacity": _as_opacity,
     "timeline_scale": _as_scale,
     "font_scale": _as_font_scale,
-    "theme": _as_theme,
     "hide_on_blur": lambda v: _as_bool(v, "hide_on_blur"),
     "release_memory_minutes": _as_minutes,
     "refresh_seconds": _as_refresh_seconds,

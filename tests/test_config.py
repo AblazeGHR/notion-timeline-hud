@@ -26,8 +26,8 @@ def test_defaults_when_missing() -> None:
 def test_roundtrip_and_atomic() -> None:
     folder = _tmpdir()
     path = folder / "config.json"
-    saved = config.save({**config.DEFAULTS, "opacity": 0.5, "theme": "light"}, path)
-    assert saved["opacity"] == 0.5 and saved["theme"] == "light", saved
+    saved = config.save({**config.DEFAULTS, "opacity": 0.5}, path)
+    assert saved["opacity"] == 0.5, saved
     assert config.load(path) == saved
     leftovers = [p.name for p in folder.iterdir() if p.name != "config.json"]
     assert leftovers == [], leftovers
@@ -48,7 +48,6 @@ def test_patch_rejects_bad_values() -> None:
     for bad in (
         {"opacity": 1.5},
         {"opacity": "0.5"},
-        {"theme": "blue"},
         {"release_memory_minutes": -1},
         {"release_memory_minutes": 1.5},
         {"hide_on_blur": "yes"},
@@ -77,7 +76,7 @@ def test_corrupt_file_falls_back() -> None:
 
 def test_wrong_types_fall_back() -> None:
     path = _tmpdir() / "config.json"
-    path.write_text(json.dumps({"opacity": "high", "theme": 3}), encoding="utf-8")
+    path.write_text(json.dumps({"opacity": "high", "timeline_scale": "big"}), encoding="utf-8")
     assert config.load(path) == config.DEFAULTS
 
 

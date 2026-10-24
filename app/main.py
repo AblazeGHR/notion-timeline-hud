@@ -982,8 +982,6 @@ class Api:
                     }
             if "opacity" in changes:
                 self.apply_opacity(updated["opacity"])
-            if "theme" in changes:
-                self.apply_theme(updated["theme"])
         except Exception as exc:  # noqa: BLE001
             app_config.save(previous)
             return {"ok": False, "error": str(exc), "config": previous}
@@ -997,7 +995,6 @@ class Api:
         """窗口加载完刷一遍透明度 / 主题（亚克力 tint 也跟着配置走）。"""
         config = state["config"]
         self.apply_opacity(config["opacity"])
-        self.apply_theme(config["theme"])
         self.set_panel_opacity(config["opacity"])
         return dict(config)
 
@@ -1008,12 +1005,6 @@ class Api:
         self._window.evaluate_js(
             f"document.documentElement.style.setProperty('--panel-alpha','{alpha:.3f}')"
         )
-
-    def apply_theme(self, theme: str) -> None:
-        if not self._window:
-            return
-        flag = "true" if theme == "light" else "false"
-        self._window.evaluate_js(f"document.body.classList.toggle('theme-light', {flag})")
 
     def apply_hotkey(self, mods: int, vk: int) -> bool:
         request = _HotkeyRequest(mods, vk)
