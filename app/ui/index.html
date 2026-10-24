@@ -572,6 +572,7 @@
   .ctxmenu button.danger { color: #FF8FA3; }
 
   /* 桌面壳模式：窗口本身就是面板，不画假桌面 */
+  html:has(body.desktop) { background: transparent; }   /* 否则 html 的 #08090D 会挡住亚克力 */
   body.desktop { background: transparent; }
   body.desktop .desk,
   body.desktop .mock-tag { display: none; }
@@ -579,6 +580,7 @@
     inset: 0; width: auto; height: auto;
     transform: none;
     animation: none;
+    border-radius: 0;      /* 贴边全高，圆角会在四角露出黑块 */
   }
 </style>
 </head>
@@ -880,8 +882,9 @@
   const DRAG_CLICK_PX = 4;    // 位移小于这个像素数算点击，不写
   let dragActive = false;     // 拖拽中忽略缩放，否则像素位移和分钟数会换算错
 
-  /* 位移像素 → 分钟，按 15 分钟取整 */
-  function dragMinutes(dy) {
+  /* 位移像素 → 分钟：全天卡片按整天（1440）吸附，其余按 15 分钟 */
+  function dragMinutes(dy, allDay) {
+    if (allDay) return Math.round(dy / (PX_PER_MIN * 1440)) * 1440;
     return Math.round((dy / PX_PER_MIN) / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
   }
 
@@ -898,6 +901,7 @@
     if (!item) return;
     const startY = e.clientY;
     const origTop = parseFloat(el.style.top) || item.y;
+    const allDay = !!t[ALL_DAY_KEY[key]];
     let dy = 0;
     let dragging = false;
 
@@ -935,7 +939,7 @@
         el.classList.add("dragging");
       }
       el.style.top = (origTop + dy) + "px";
-      dragtip.textContent = tipLabel(t, key, dragMinutes(dy));
+      dragtip.textContent = tipLabel(t, key, dragMinutes(dy, allDay));
       dragtip.style.left = Math.min(ev.clientX + 12, window.innerWidth - 120) + "px";
       dragtip.style.top = Math.max(4, ev.clientY - 28) + "px";
       dragtip.classList.add("on");
@@ -946,7 +950,7 @@
       if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
       el._dragEndedAt = Date.now();
 
-      const minutes = dragMinutes(dy);
+      const minutes = dragMinutes(dy, allDay);
       const api = bridge();
       if (!minutes || !api) {
         restore();
@@ -1279,6 +1283,18 @@
     if (e.key === "ArrowLeft") setTrack("sched");
     if (e.key === "ArrowRight") setTrack("due");
   });
+
+  /* ---------- 拖动窗口：header 空白处按下 ---------- */
+  const topbar = document.querySelector(".topbar");
+  if (topbar) {
+    topbar.addEventListener("mousedown", e => {
+      if (e.button !== 0) return;
+      if (e.target.closest("button, input, .switch, .slider, .iconbtn")) return;  // 控件不拖窗口
+      e.preventDefault();
+      const api = bridge();
+      if (api && api.start_drag) api.start_drag();
+    });
+  }
 
   const closeBtn = document.getElementById("btnClose");
   if (closeBtn) {

@@ -37,8 +37,7 @@ from notion_timeline.cache_reader import read_tasks  # noqa: E402
 from notion_timeline.dates import shift  # noqa: E402
 from notion_timeline.models import DateValue, PropertyValue  # noqa: E402
 
-WIDTH, HEIGHT = 460, 720
-MARGIN_RIGHT = 80
+WIDTH = 460          # 宽度固定；高度按屏幕算（整屏高）
 APP_NAME = "TimelineHUD"
 TZ = "Asia/Shanghai"
 
@@ -51,10 +50,31 @@ VK_SPACE = 0x20
 VK_Q = 0x51
 GA_ROOT = 2
 PM_REMOVE = 0x0001
+WM_NCLBUTTONDOWN = 0x00A1
+HTCAPTION = 2
+HWND_TOPMOST = -1
+SWP_SHOWWINDOW = 0x0040
 HOTKEY_ID_TOGGLE = 1
 HOTKEY_ID_QUIT = 2
 
 user32 = ctypes.windll.user32
+user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = ctypes.c_bool
+_set_window_pos = user32.SetWindowPos
+try:
+    _set_window_pos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    _set_window_pos.restype = ctypes.c_bool
+except Exception:  # noqa: BLE001
+    pass
+
+_send_message = user32.SendMessageW
+try:  # 64 位下 hwnd 不能按默认 32 位 int 传，否则会被截断
+    _send_message.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                              ctypes.c_void_p, ctypes.c_void_p]
+    _send_message.restype = ctypes.c_void_p
+except Exception:  # noqa: BLE001
+    pass
 
 state: dict[str, Any] = {
     "visible": True,
@@ -122,8 +142,11 @@ class WINCOMPATTRDATA(ctypes.Structure):
 
 
 def apply_acrylic(hwnd: int) -> bool:
-    """4 = ACCENT_ENABLE_ACRYLICBLURBEHIND，颜色按 AABBGGRR。"""
-    accent = ACCENTPOLICY(4, 0, 0xD01D1816, 0)
+    """4 = ACCENT_ENABLE_ACRYLICBLURBEHIND，颜色按 AABBGGRR。
+
+    0x401A1B22：alpha 0x40（25%），比原来的 0xD0 淡，透出更多桌面内容。
+    """
+    accent = ACCENTPOLICY(4, 0, 0x401A1B22, 0)
     data = WINCOMPATTRDATA(
         19, ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p), ctypes.sizeof(accent)
     )
@@ -177,6 +200,23 @@ def cancel_memory_trim() -> None:
         if _trim_timer is not None:
             _trim_timer.cancel()
             _trim_timer = None
+
+
+def fit_to_screen(hwnd: int) -> tuple[int, int, int, int]:
+    """按物理像素把窗口钉到右边缘、整屏高。
+
+    pywebview 的 x/y/width/height 会各自再乘一次 DPI，还对高度做了工作区裁剪，
+    算不准；这里直接用 SetWindowPos 覆盖成实测值，宽度沿用创建后的实际宽度。
+    """
+    rect = wintypes.RECT()
+    user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect))
+    width = max(320, rect.right - rect.left)
+    screen_w = user32.GetSystemMetrics(0)
+    screen_h = user32.GetSystemMetrics(1)
+    left = max(0, screen_w - width)
+    _set_window_pos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), left, 0,
+                    width, screen_h, SWP_SHOWWINDOW)
+    return left, 0, left + width, screen_h
 
 
 # ---------------------------------------------------------------- 窗口动作
@@ -347,6 +387,18 @@ class Api:
             state["visible"] = False
             schedule_memory_trim()
 
+    def start_drag(self) -> None:
+        """拖动窗口：ReleaseCapture 后把“标题栏按下”转给系统，由 Windows 接管移动。"""
+        hwnd = state["hwnd"]
+        if not hwnd:
+            return
+        try:
+            user32.ReleaseCapture()
+            _send_message(ctypes.c_void_p(hwnd), WM_NCLBUTTONDOWN,
+                          ctypes.c_void_p(HTCAPTION), ctypes.c_void_p(0))
+        except Exception as exc:  # noqa: BLE001
+            print("窗口拖动失败:", exc, flush=True)
+
     def quit(self) -> None:
         if self._window:
             self._window.destroy()
@@ -507,11 +559,14 @@ class Api:
 
 
 def screen_size() -> tuple[int, int]:
-    """优先用 WinForms 的屏幕尺寸，保证和 pywebview 的坐标单位一致。"""
+    """整屏尺寸（不是工作区）：面板要上下贴边、盖住任务栏那一行。
+
+    优先用 WinForms，保证和 pywebview 的坐标单位一致。
+    """
     try:
         from System.Windows.Forms import Screen
 
-        area = Screen.PrimaryScreen.WorkingArea
+        area = Screen.PrimaryScreen.Bounds
         return int(area.Width), int(area.Height)
     except Exception:  # noqa: BLE001
         return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
@@ -554,8 +609,10 @@ def main() -> None:
     except Exception:  # noqa: BLE001
         scale = 1.0
     logical_w, logical_h = screen_w / scale, screen_h / scale
-    x = max(0, int(logical_w - WIDTH - MARGIN_RIGHT))
-    y = max(0, int((logical_h - HEIGHT) / 2))
+    # 右侧贴边 + 上下贴边：宽固定，高铺满整屏
+    x = round(logical_w - WIDTH)
+    y = 0
+    height = round(logical_h)
 
     api = Api()
     window = webview.create_window(
@@ -563,7 +620,7 @@ def main() -> None:
         html=render_html(),
         js_api=api,
         width=WIDTH,
-        height=HEIGHT,
+        height=height,
         x=x,
         y=y,
         frameless=True,
@@ -580,9 +637,12 @@ def main() -> None:
         try:
             hwnd = window.native.Handle.ToInt64()
             state["hwnd"] = hwnd
+            left, top, right, bottom = fit_to_screen(hwnd)
+            print(f"fit_to_screen -> ({left},{top},{right},{bottom})", flush=True)
             ok = apply_acrylic(hwnd) if not args.no_blur else False
-            print(f"hwnd={hwnd} pos=({x},{y}) screen=({screen_w},{screen_h}) "
-                  f"acrylic={'ok' if ok else 'skip/fail'}", flush=True)
+            print(f"hwnd={hwnd} pos=({x},{y}) size=({WIDTH},{height}) "
+                  f"screen=({screen_w},{screen_h}) acrylic={'ok' if ok else 'skip/fail'}",
+                  flush=True)
         except Exception as exc:  # noqa: BLE001
             print("native handle failed:", exc, flush=True)
         api.apply_visuals()
