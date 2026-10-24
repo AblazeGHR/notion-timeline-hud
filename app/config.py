@@ -28,7 +28,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SCALE_MIN = 6.0
-SCALE_MAX = 40.0
+SCALE_MAX = 48.0
 FONT_MIN = 0.8
 FONT_MAX = 1.5
 

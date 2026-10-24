@@ -422,6 +422,20 @@
   .chip .link:hover { background: rgba(124,140,255,.5); color: #fff; }
   .tick { position: absolute; left: 0; width: 6px; height: 2px; border-radius: 2px; opacity: .7; }
 
+  /* ---------------- 小时刻度 ---------------- */
+  .hour-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+  .hourline {
+    position: absolute; left: var(--gutter); right: 6px; height: 1px;
+    background: rgba(255,255,255,.045);     /* 比日线淡一半 */
+  }
+  .hourlabel {
+    position: absolute; left: 0; width: calc(var(--gutter) - 8px);
+    text-align: right; font-size: 8.5px; color: var(--faint);
+    opacity: .6; transform: translateY(-50%);
+    font-variant-numeric: tabular-nums;
+  }
+  body.theme-light .hourline { background: rgba(0,0,0,.06); }
+
   /* ---------------- 拖拽改期 ---------------- */
   body.drag-lock,
   body.drag-lock * { user-select: none; }        /* 只禁选中，滚轮/边缘滚动照常 */
@@ -884,7 +898,7 @@
     <div class="srow">
       <span>时间轴密度</span>
       <span class="density">
-        <input type="range" class="slider" id="scaleSlider" min="6" max="40" step="0.5" value="14">
+        <input type="range" class="slider" id="scaleSlider" min="6" max="48" step="0.5" value="14">
         <b id="scaleValue">14 px/h</b>
       </span>
     </div>
@@ -981,7 +995,7 @@
   const nowTs = NOW.getTime();
 
   /* 时间轴密度：px/hour。滚轮只改临时值，配置里的 timeline_scale 是默认值 */
-  const SCALE_MIN = 6, SCALE_MAX = 40, SCALE_WHEEL_FACTOR = 1.15;
+  const SCALE_MIN = 6, SCALE_MAX = 48, SCALE_WHEEL_FACTOR = 1.15;   // 上限提到 48，否则 44 那档刻度够不着
   const CFG = window.__CFG__ || {};
   let DEFAULT_SCALE = clampScale(CFG.timeline_scale == null ? 14 : CFG.timeline_scale);
   let PX_PER_HOUR = DEFAULT_SCALE;
@@ -1075,6 +1089,8 @@
   canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
 
   const dayMarks = [];   // 缩放时按 index 重算 top
+  const hourLayer = document.createElement("div");
+  hourLayer.className = "hour-layer";   // 小时刻度独立一层，不混进 dayMarks
 
   function rebuildDayMarks() {
     canvas.querySelectorAll(".dayline, .daylabel").forEach(node => node.remove());
@@ -1102,6 +1118,8 @@
     }
   }
   rebuildDayMarks();
+  canvas.appendChild(hourLayer);
+  rebuildHourTicks();
 
   const lanes = {
     sched: Object.assign(document.createElement("div"), { className: "lane" }),
@@ -1364,6 +1382,29 @@
     hint.classList.toggle("on", shown.length === 0);
   }
 
+  /* 小时刻度：>=18px/h 出细线；>=30 每 6h 标签（00/06/12/18）；>=44 每 2h 标签 */
+  function rebuildHourTicks() {
+    hourLayer.innerHTML = "";
+    if (PX_PER_HOUR < 18) return;
+    const labelEvery = PX_PER_HOUR >= 44 ? 2 : (PX_PER_HOUR >= 30 ? 6 : 0);
+    const total = DAYS * 24;
+    for (let h = 1; h < total; h++) {
+      if (h % 24 === 0) continue;            // 整点日界交给 dayline
+      const y = h * PX_PER_HOUR;
+      const line = document.createElement("div");
+      line.className = "hourline";
+      line.style.top = y + "px";
+      hourLayer.appendChild(line);
+      if (labelEvery && h % labelEvery === 0) {
+        const label = document.createElement("div");
+        label.className = "hourlabel";
+        label.style.top = y + "px";
+        label.textContent = String(h % 24).padStart(2, "0");
+        hourLayer.appendChild(label);
+      }
+    }
+  }
+
   function layoutLane(key) {
     lanes[key].querySelectorAll(".tick").forEach(node => node.remove());
     // items 保留全部（搜索过滤后还要能恢复），只有可见的参与堆叠
@@ -1464,6 +1505,7 @@
     computeRange();
     canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
     rebuildDayMarks();
+    rebuildHourTicks();
     ["sched", "due"].forEach(key => {
       items[key].length = 0;
       lanes[key].innerHTML = "";
@@ -1572,6 +1614,7 @@
       mark.line.style.top = y + "px";
       mark.label.style.top = y + "px";
     });
+    rebuildHourTicks();
     ["sched", "due"].forEach(key => {
       items[key].forEach(item => { item.y = yOf(base + item.t[item.key] * H); });
       layoutLane(key);   // 重算避让与 tick

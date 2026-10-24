@@ -104,7 +104,7 @@ def test_timeline_scale() -> None:
     path = _tmpdir() / "config.json"
     cfg = config.load(path)
     assert cfg["timeline_scale"] == 14.0, cfg
-    for good, want in ((6, 6.0), (40, 40.0), (22.5, 22.5), (14.3, 14.5), ("18", None)):
+    for good, want in ((6, 6.0), (48, 48.0), (22.5, 22.5), (14.3, 14.5), ("18", None)):
         if want is None:
             try:
                 config.patch({"timeline_scale": good}, path)
@@ -112,7 +112,7 @@ def test_timeline_scale() -> None:
                 continue
             raise AssertionError(f"应该拒绝 {good!r}")
         assert config.patch({"timeline_scale": good}, path)["timeline_scale"] == want
-    for bad in (5.9, 40.1, 0, -1, True, "high", None):
+    for bad in (5.9, 48.1, 0, -1, True, "high", None):
         try:
             config.patch({"timeline_scale": bad}, path)
         except ValueError:
