@@ -2240,8 +2240,16 @@
     closePlaceholder();
     const el = document.createElement("div");
     el.className = "phcard";
-    el.style.top = yOf(startMin * 60000) + "px";
-    if (endMin) el.style.height = Math.max(34, (endMin - startMin) * PX_PER_MIN) + "px";
+    const phTop = yOf(startMin * 60000);
+    const phH = endMin ? Math.max(34, (endMin - startMin) * PX_PER_MIN) : 34;
+    el.style.top = phTop + "px";
+    if (endMin) el.style.height = phH + "px";
+    // 和已有卡片重叠时先向右错开 8px（不改真实时间）
+    const overlap = items[key].some(it => {
+      if (!it.el.isConnected) return false;
+      return phTop < it.y + it.h - 2 && phTop + phH > it.y + 2;
+    });
+    el.style.left = overlap ? "15px" : "7px";
 
     const time = document.createElement("div");
     time.className = "phtime";
@@ -2286,6 +2294,7 @@
           items[key].push(item);
           layoutLane(key);
           updateCounts();
+          revealChip(item.el);
         }
       } else {
         done = false;
@@ -2302,6 +2311,17 @@
     });
     input.addEventListener("blur", () => { if (!input.value.trim()) cancel(); });
     el.addEventListener("mousedown", ev => ev.stopPropagation());
+  }
+
+  /* 新建后的反馈：滚到可见，并短暂选中 */
+  function revealChip(el) {
+    const rect = el.getBoundingClientRect();
+    const box = scroll.getBoundingClientRect();
+    if (rect.top < box.top + 40 || rect.bottom > box.bottom - 40) {
+      scroll.scrollTop += rect.top - (box.top + box.height / 2);
+    }
+    el.classList.add("sel");
+    setTimeout(() => el.classList.remove("sel"), 300);
   }
 
   /* 单击空白：有弹窗先关，否则建占位卡 */
