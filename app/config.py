@@ -19,6 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "opacity": 0.82,
     "timeline_scale": 14.0,
     "font_scale": 1.0,
+    "dock_side": "right",
     "seen_intro": False,
     "open_in_app": True,
     "hide_on_blur": False,
@@ -106,6 +107,12 @@ def _as_scale(value: Any) -> float:
     return round(number * 2) / 2  # 取整到 0.5，和界面一致
 
 
+def _as_dock_side(value: Any) -> str:
+    if value not in ("left", "right"):
+        raise ValueError("dock_side 只能是 left 或 right")
+    return str(value)
+
+
 def _as_font_scale(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"font_scale 必须是 {FONT_MIN}~{FONT_MAX} 的数字")
@@ -152,6 +159,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "opacity": _as_opacity,
     "timeline_scale": _as_scale,
     "font_scale": _as_font_scale,
+    "dock_side": _as_dock_side,
     "hide_on_blur": lambda v: _as_bool(v, "hide_on_blur"),
     "release_memory_minutes": _as_minutes,
     "refresh_seconds": _as_refresh_seconds,

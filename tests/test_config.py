@@ -134,6 +134,20 @@ def test_font_scale() -> None:
     assert config.load(path)["font_scale"] == 1.23
 
 
+def test_dock_side() -> None:
+    path = _tmpdir() / "config.json"
+    assert config.load(path)["dock_side"] == "right", "默认靠右"
+    for good in ("left", "right"):
+        assert config.patch({"dock_side": good}, path)["dock_side"] == good
+    for bad in ("LEFT", "center", "", None, True):
+        try:
+            config.patch({"dock_side": bad}, path)
+        except ValueError:
+            continue
+        raise AssertionError(f"应该拒绝 {bad!r}")
+    assert config.load(path)["dock_side"] == "right"
+
+
 def test_parse_hotkey() -> None:
     assert config.parse_hotkey("Ctrl+Alt+Space") == (config.MOD_CONTROL | config.MOD_ALT, 0x20)
     assert config.parse_hotkey("ctrl+shift+f9") == (config.MOD_CONTROL | config.MOD_SHIFT, 0x78)

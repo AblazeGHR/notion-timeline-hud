@@ -1053,6 +1053,13 @@
       </span>
     </div>
     <div class="srow">
+      <span>停靠位置</span>
+      <span class="seg" id="dockSeg">
+        <button data-side="left">左</button>
+        <button data-side="right" class="on">右</button>
+      </span>
+    </div>
+    <div class="srow">
       <span>在 Notion 应用中打开</span>
       <span class="switch on" id="swOpenInApp" data-toggle></span>
     </div>
@@ -2129,6 +2136,26 @@
   const swHideBlur = document.getElementById("swHideBlur");
   const swRelease = document.getElementById("swRelease");
   const hotkeyKeys = document.getElementById("hotkeyKeys");
+  const dockSeg = document.getElementById("dockSeg");
+
+  function paintDock(side) {
+    const target = side === "left" ? "left" : "right";
+    dockSeg.querySelectorAll("button[data-side]").forEach(btn =>
+      btn.classList.toggle("on", btn.dataset.side === target));
+  }
+
+  dockSeg.addEventListener("click", async e => {
+    const btn = e.target.closest("button[data-side]");
+    if (!btn) return;
+    e.stopPropagation();
+    const side = btn.dataset.side;
+    paintDock(side);
+    const res = await setConfig({ dock_side: side });
+    if (!res || !res.ok) {
+      toast("停靠位置没保存上：" + ((res && res.error) || "未知错误"));
+      paintDock((res && res.config && res.config.dock_side) || "right");
+    }
+  });
 
   function paintSlider(percent) {
     slider.style.background =
@@ -2404,6 +2431,7 @@
       const actual = await api.get_autostart();      // 以注册表实际状态为准
       if (actual && actual.ok && actual.enabled !== null) autostartOn = !!actual.enabled;
     }
+    paintDock(cfg.dock_side);
     swAutostart.classList.toggle("on", autostartOn);
     swOpenInApp.classList.toggle("on", cfg.open_in_app !== false);
     swHideBlur.classList.toggle("on", cfg.hide_on_blur === true);

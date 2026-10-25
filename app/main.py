@@ -700,20 +700,60 @@ def list_monitors() -> list[str]:
     return items or ["<未枚举到显示器>"]
 
 
-def fit_to_monitor(hwnd: int, point: tuple[int, int] | None = None) -> tuple[int, int, int, int]:
-    """贴到 point（默认鼠标）所在显示器的右缘、整屏高。"""
-    left, top, right, bottom = monitor_rect(point)
+def _window_rect(hwnd: int) -> wintypes.RECT:
     rect = wintypes.RECT()
     user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect))
+    return rect
+
+
+def dock_side_of(hwnd: int) -> str:
+    """窗口中心离哪边近就算停在哪边（用窗口所在显示器，不跟鼠标）。"""
+    rect = _window_rect(hwnd)
+    cx = (rect.left + rect.right) // 2
+    cy = (rect.top + rect.bottom) // 2
+    left, _top, right, _bottom = monitor_rect(point=(cx, cy))
+    return "left" if (cx - left) < (right - cx) else "right"
+
+
+def remember_dock_side() -> str | None:
+    """隐藏前记住自由拖动后的停靠边，写回 config.json。"""
+    hwnd = state["hwnd"]
+    if not hwnd:
+        return None
+    try:
+        side = dock_side_of(hwnd)
+    except Exception as exc:  # noqa: BLE001
+        print("判断停靠边失败:", exc, flush=True)
+        return None
+    if side != state["config"].get("dock_side"):
+        state["config"] = app_config.patch({"dock_side": side})
+        print(f"隐藏吸附 -> {side}", flush=True)
+    return side
+
+
+def fit_to_monitor(
+    hwnd: int,
+    point: tuple[int, int] | None = None,
+    *,
+    side: str | None = None,
+    show: bool = True,
+) -> tuple[int, int, int, int]:
+    """贴到 point（默认鼠标）所在显示器的指定边、整屏高。"""
+    left, top, right, bottom = monitor_rect(point)
+    rect = _window_rect(hwnd)
     width = max(320, rect.right - rect.left)
-    x = max(left, right - width)
+    side = side or state["config"].get("dock_side", "right")
+    x = left if side == "left" else max(left, right - width)
+    flags = 0x0010 | (SWP_SHOWWINDOW if show else 0)   # 0x10 = SWP_NOACTIVATE
     _set_window_pos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), x, top,
-                    width, bottom - top, SWP_SHOWWINDOW)
+                    width, bottom - top, flags)
     return x, top, x + width, bottom
 
 
-def fit_to_screen(hwnd: int, *, show: bool = True) -> tuple[int, int, int, int]:
-    """按物理像素把窗口钉到右边缘、整屏高。
+def fit_to_screen(
+    hwnd: int, *, show: bool = True, side: str | None = None
+) -> tuple[int, int, int, int]:
+    """按物理像素把窗口钉到配置的停靠边、整屏高。
 
     pywebview 的 x/y/width/height 会各自再乘一次 DPI，还对高度做了工作区裁剪，
     算不准；这里直接用 SetWindowPos 覆盖成实测值，宽度沿用创建后的实际宽度。
@@ -724,7 +764,8 @@ def fit_to_screen(hwnd: int, *, show: bool = True) -> tuple[int, int, int, int]:
     width = max(320, rect.right - rect.left)
     screen_w = user32.GetSystemMetrics(0)
     screen_h = user32.GetSystemMetrics(1)
-    left = max(0, screen_w - width)
+    side = side or state["config"].get("dock_side", "right")
+    left = 0 if side == "left" else max(0, screen_w - width)
     flags = 0x0010 | (SWP_SHOWWINDOW if show else 0)   # 0x10 = SWP_NOACTIVATE
     _set_window_pos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), left, 0,
                     width, screen_h, flags)
@@ -777,6 +818,7 @@ def show_window(window: webview.Window) -> None:
 def toggle(window: webview.Window) -> None:
     try:
         if state["visible"]:
+            remember_dock_side()
             reset_timeline_scale(window)
             window.hide()
             state["visible"] = False
@@ -844,6 +886,7 @@ def blur_watch(window: webview.Window, stop: threading.Event | None = None) -> N
             continue
         if root and root != state["hwnd"]:
             try:
+                remember_dock_side()
                 reset_timeline_scale(window)
                 window.hide()
                 state["visible"] = False
@@ -1006,6 +1049,7 @@ class Api:
 
     def hide(self) -> None:
         if self._window:
+            remember_dock_side()
             reset_timeline_scale(self._window, offload=True)  # 从 JS 线程进来，别同步等
             self._window.hide()
             state["visible"] = False
@@ -1075,6 +1119,13 @@ class Api:
             return {"ok": False, "error": str(exc), "config": previous}
 
         state["config"] = updated
+        if "dock_side" in changes and state["hwnd"]:
+            try:
+                box = fit_to_monitor(
+                    state["hwnd"], side=updated["dock_side"], show=bool(state["visible"]))
+                print(f"停靠切换 -> {updated['dock_side']} {box}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print("停靠切换失败:", exc, flush=True)
         if "release_memory_minutes" in changes and not state["visible"]:
             schedule_memory_trim()
         return {"ok": True, "config": updated}
