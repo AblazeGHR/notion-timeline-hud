@@ -344,6 +344,7 @@
   .lane {
     position: absolute; top: 0; bottom: 0;
     left: var(--gutter); right: 8px;
+    z-index: 1;                    /* 高于 .hour-layer(0)，卡片才能压住刻度线 */
     transition: opacity .18s ease;
   }
   .lane[data-track="sched"] {
@@ -365,7 +366,7 @@
     max-width: calc(100% - 14px);
     padding: 4px 7px 5px 8px;
     border-radius: 8px;
-    background: rgba(255,255,255,.05);
+    background: linear-gradient(180deg, rgba(30,32,40,.99), rgba(24,26,33,.99));
     border: 1px solid rgba(255,255,255,.065);
     border-left: 2px solid var(--lane-color, var(--accent));
     cursor: default;
@@ -375,13 +376,13 @@
   }
   .chip:hover {
     transform: translateY(-1px);
-    background: rgba(255,255,255,.085);
+    background: linear-gradient(180deg, rgba(40,43,54,.97), rgba(32,34,43,.98));
     border-color: rgba(255,255,255,.14);
     box-shadow: 0 8px 18px -8px rgba(0,0,0,.8);
     z-index: 20 !important;
   }
   .chip.sel {
-    background: rgba(124,140,255,.15);
+    background: linear-gradient(180deg, rgba(52,58,92,.96), rgba(40,44,66,.97));
     border-color: rgba(124,140,255,.45);
     box-shadow: 0 0 0 1px rgba(124,140,255,.28), 0 10px 22px -10px rgba(0,0,0,.85);
     z-index: 21 !important;
@@ -454,9 +455,9 @@
   .hour-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
   .hourline {
     position: absolute; left: var(--gutter); right: 6px; height: 1px;
-    background: rgba(255,255,255,.22);      /* 仍比日线淡，但能看清 */
+    background: rgba(255,255,255,.12);      /* 仍比日线淡，但能看清 */
   }
-  .hourline.half { background: rgba(255,255,255,.10); }   /* 120+ 档的半小时线，再淡一档 */
+  .hourline.half { background: rgba(255,255,255,.06); }   /* 120+ 档的半小时线，再淡一档 */
   .hourlabel {
     position: absolute; right: calc(100% - var(--gutter) + 6px);
     font-size: 9.5px; color: #A8AAB8;
