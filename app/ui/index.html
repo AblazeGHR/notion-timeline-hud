@@ -436,6 +436,7 @@
   .chip .hedge.bottom::after { bottom: 0; }
   .chip .hedge:hover::after { background: rgba(190,200,255,.95); }
   .chip.allday .hedge { display: none; }
+  .chip.allday:hover .hedge { display: block; }   /* 全天卡 hover 后也能拖上下沿转定时 */
   .chip.edge-drag { box-shadow: 0 0 0 1px rgba(124,140,255,.7); }
   /* 外链按钮：绝对定位，不参与文字排版（hover 才出现） */
   .chip .link {
@@ -1350,6 +1351,31 @@
   }
   canvas.style.height = timelineHeight() + "px";
 
+  /* ---- 坐标换算唯一入口 ----
+     CSS zoom 下 getBoundingClientRect 是缩放后的尺寸，offsetHeight 是布局尺寸；
+     ratio = 布局/视口，乘它把 clientY 换回内容坐标，不要手乘 zoom。 */
+  function canvasYRatio() {
+    const rect = canvas.getBoundingClientRect();
+    return rect.height ? canvas.offsetHeight / rect.height : 1;
+  }
+  /* clientY → 绝对分钟（epoch 分钟，未吸附）；minuteToY 是它的逆运算 */
+  function yToMinute(clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return canvasStart / 60000 + ((clientY - rect.top) * canvasYRatio()) / PX_PER_MIN;
+  }
+  function minuteToY(minute) {
+    const rect = canvas.getBoundingClientRect();
+    const y = (((minute * 60000) - canvasStart) / 60000) * PX_PER_MIN;
+    return rect.top + y / canvasYRatio();
+  }
+  function snapMinute(minute) {
+    return Math.round(minute / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
+  }
+  /* 视口半高 → 内容像素（zoom 换算），滚动定位用 */
+  function contentHalfViewport() {
+    return (scroll.clientHeight * canvasYRatio()) / 2;
+  }
+
   const dayMarks = [];   // 缩放时按 index 重算 top
   const hourLayer = document.createElement("div");
   hourLayer.className = "hour-layer";   // 小时刻度独立一层，不混进 dayMarks
@@ -1430,26 +1456,37 @@
 
   /* 上下沿拖动：上沿改 start（end 固定），下沿改 end（start 固定） */
   function startEdgeDrag(e, el, t, key, side) {
-    if (t[ALL_DAY_KEY[key]]) return;
     const item = items[key].find(it => it.el === el);
     if (!item) return;
 
+    const allDay = !!t[ALL_DAY_KEY[key]];
     const hadEnd = typeof t[END_KEY[key]] === "number" && t[END_KEY[key]] > t[key];
     const startMin0 = Math.round(t[key] * 60);
     const endMin0 = hadEnd ? Math.round(t[END_KEY[key]] * 60) : startMin0 + 30;
     const baseH = el._baseH || el.offsetHeight;
-    const baseMin = base / 60000;          // 今天 0 点的绝对分钟，用于换算
+    const baseMin = base / 60000;
+    /* 全天卡没有 end：按卡片高度折算时长，15 分钟吸附、最短 30 分钟 */
+    const allDayDur = allDay
+      ? Math.max(30, Math.ceil((baseH / PX_PER_MIN) / DRAG_SNAP_MIN) * DRAG_SNAP_MIN)
+      : 0;
+
     let pointerY = e.clientY;
     let pointerX = e.clientX;
     const top0 = parseFloat(el.style.top) || item.y;
     const height0 = el.offsetHeight;
     let dragging = false;
     let curStart = startMin0;
-    let curEnd = hadEnd ? endMin0 : null;
+    let curEnd = allDay ? startMin0 + allDayDur : (hadEnd ? endMin0 : null);
     let stopAuto = null;
+    let rafId = 0;
+    let pendingY = pointerY;
 
     document.body.classList.add("drag-lock");
     dragActive = true;
+    resizing = true;
+    if (e.pointerId !== undefined && el.setPointerCapture) {
+      try { el.setPointerCapture(e.pointerId); } catch (_err) { /* 捕获失败不影响拖拽 */ }
+    }
 
     const pointOf = min => {
       const d = new Date(base + min * 60000);
@@ -1465,42 +1502,69 @@
       layoutLane(key);
     };
 
-    /* 预览：按「指针 y + scrollTop」算目标时刻，滚动后也跟手 */
+    /* 预览只改 top/height，不重排、不做命中检测 */
     const applyPreview = y => {
       const relMin = minuteAt(y) - baseMin;
-      if (side === "start") {
-        curStart = hadEnd ? Math.min(relMin, endMin0 - EDGE_MIN_MINUTES) : relMin;
-        el.style.top = yOf(base + curStart * 60000) + "px";
-        if (hadEnd) {
-          el.style.height = Math.max(baseH, (endMin0 - curStart) * PX_PER_MIN) + "px";
+      if (allDay) {
+        if (side === "start") {
+          curStart = relMin;
+          curEnd = curStart + allDayDur;
+        } else {
+          curEnd = Math.max(relMin, startMin0 + EDGE_MIN_MINUTES);
+          curStart = startMin0;
         }
+      } else if (side === "start") {
+        curStart = hadEnd ? Math.min(relMin, endMin0 - EDGE_MIN_MINUTES) : relMin;
       } else {
         curEnd = Math.max(relMin, startMin0 + EDGE_MIN_MINUTES);
-        el.style.height = Math.max(baseH, (curEnd - startMin0) * PX_PER_MIN) + "px";
       }
-      const tipMin = side === "start" ? curStart : curEnd;
-      dragtip.textContent = hhmm(base + tipMin * 60000);
+      const topMin = side === "start" ? curStart : startMin0;
+      const bottomMin = curEnd === null ? endMin0 : curEnd;
+      el.style.top = yOf(base + topMin * 60000) + "px";
+      if (curEnd !== null) {
+        el.style.height = Math.max(baseH, (bottomMin - topMin) * PX_PER_MIN) + "px";
+      }
+      dragtip.textContent = allDay
+        ? hhmm(base + curStart * 60000) + "–" + hhmm(base + curEnd * 60000)
+        : hhmm(base + (side === "start" ? curStart : curEnd) * 60000);
       placeDragTip(pointerX, y);
       dragtip.classList.add("on");
     };
 
+    /* 一帧只算一次，连续 pointermove 不会来回抖 */
+    const schedule = y => {
+      pendingY = y;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        applyPreview(pendingY);
+      });
+    };
+
     const onMove = ev => {
+      if (e.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
       pointerY = ev.clientY;
       pointerX = ev.clientX;
       if (!dragging) {
         if (Math.abs(ev.clientY - e.clientY) < 3) return;
         dragging = true;
         el.classList.add("edge-drag");
-        stopAuto = startAutoScroll(() => pointerY, () => applyPreview(pointerY));
+        stopAuto = startAutoScroll(() => pointerY, () => schedule(pointerY));
       }
-      applyPreview(pointerY);
+      schedule(pointerY);
     };
 
     const detach = () => {
       dragActive = false;
+      holdResizing();
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       if (stopAuto) { stopAuto(); stopAuto = null; }
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      if (e.pointerId !== undefined && el.releasePointerCapture) {
+        try { el.releasePointerCapture(e.pointerId); } catch (_err) { /* 已释放 */ }
+      }
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("keydown", onKey, true);
       document.body.classList.remove("drag-lock");
       dragtip.classList.remove("on");
@@ -1515,29 +1579,43 @@
       restore();
     };
 
+    const onCancel = () => {
+      detach();
+      restore();
+    };
+
     const onUp = async () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (dragging) applyPreview(pointerY);     // 松手前对齐最后一次指针位置
       detach();
       if (!dragging) return;
+      suppressClickOnce();
       el._dragEndedAt = Date.now();
-      if (curStart === startMin0 && (curEnd === null ? endMin0 : curEnd) === endMin0) {
+
+      const submitStart = allDay
+        ? curStart
+        : (hadEnd ? Math.min(curStart, endMin0 - EDGE_MIN_MINUTES) : curStart);
+      const submitEnd = curEnd === null
+        ? null
+        : (allDay ? curEnd : Math.max(curEnd, submitStart + EDGE_MIN_MINUTES));
+      if (submitStart === startMin0 && (submitEnd === null ? endMin0 : submitEnd) === endMin0) {
         restore();
         return;
       }
       const api = bridge();
       if (!api) { restore(); return; }
-      const submitStart = hadEnd
-        ? Math.min(curStart, endMin0 - EDGE_MIN_MINUTES)
-        : curStart;
-      const submitEnd = curEnd === null
-        ? null
-        : Math.max(curEnd, submitStart + EDGE_MIN_MINUTES);
       el.style.opacity = ".7";
       const res = await api.resize_task(
-        t.id, TRACK_PROP[key], pointOf(submitStart), submitEnd === null ? null : pointOf(submitEnd));
+        t.id, TRACK_PROP[key], pointOf(submitStart),
+        submitEnd === null ? null : pointOf(submitEnd));
       el.style.opacity = "";
       if (res && res.ok) {
         t[key] = submitStart / 60;
         t[END_KEY[key]] = submitEnd === null ? null : submitEnd / 60;
+        if (allDay) {
+          t[ALL_DAY_KEY[key]] = false;
+          el.classList.remove("allday");
+        }
         item.y = yOf(base + t[key] * H);
         const timeSpan = el.querySelector(".row2 span");
         if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
@@ -1549,13 +1627,13 @@
       layoutLane(key);
     };
 
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
     window.addEventListener("keydown", onKey, true);
   }
 
   function chipHtml(t, key, ts, late) {
-    const allDay = !!t[ALL_DAY_KEY[key]];
     const lateText = late
       ? (nowTs - ts >= DAY ? "逾期 " + Math.ceil((nowTs - ts) / DAY) + "d"
                            : "逾期 " + Math.max(1, Math.round((nowTs - ts) / H)) + "h")
@@ -1571,8 +1649,8 @@
         (t.tag ? '<span class="tag">' + t.tag + '</span>' : '') +
         (lateText ? '<span class="late">' + lateText + '</span>' : '') +
       '</div>' +
-      (allDay ? "" : '<div class="hedge top" data-edge="start"></div>' +
-                     '<div class="hedge bottom" data-edge="end"></div>')
+      '<div class="hedge top" data-edge="start"></div>' +
+      '<div class="hedge bottom" data-edge="end"></div>'
     );
   }
 
@@ -1584,11 +1662,15 @@
   const DRAG_SNAP_MIN = 15;   // 吸附粒度
   const DRAG_CLICK_PX = 4;    // 位移小于这个像素数算点击，不写
   let dragActive = false;     // 拖拽中忽略缩放，否则像素位移和分钟数会换算错
+  let resizing = false;       // 拖拽结束再多保持一帧，挡住 mouseup 后的误 click
 
-  /* 指针位置 → 该处的时刻（含当前滚动量，滚动后依然对得上） */
+  function holdResizing() {
+    requestAnimationFrame(() => requestAnimationFrame(() => { resizing = false; }));
+  }
+
+  /* 指针位置 → 该处的时刻（统一走 yToMinute，zoom / 滚动都在里面） */
   function tsAtPoint(clientY) {
-    const rect = scroll.getBoundingClientRect();
-    return canvasStart + ((scroll.scrollTop + (clientY - rect.top)) / PX_PER_MIN) * 60000;
+    return yToMinute(clientY) * 60000;
   }
 
   /* 目标时刻 → 吸附后的毫秒数：全天按整天，其余按 15 分钟 */
@@ -1658,32 +1740,59 @@
     const origTop = parseFloat(el.style.top) || item.y;
     const topOffset = origTop - yOf(startTs);   // 被避让顶开的那点偏移，拖动时保留
     const startClientY = e.clientY;
+    const allDayDur = allDay
+      ? Math.max(30, Math.ceil(((el._baseH || el.offsetHeight) / PX_PER_MIN) / DRAG_SNAP_MIN)
+        * DRAG_SNAP_MIN)
+      : 0;
     let pointerY = e.clientY;
     let dragging = false;
     let targetTs = startTs;
     let stopAuto = null;
+    let rafId = 0;
+    let pendingY = pointerY;
 
     e.preventDefault();    // 禁掉原生文本选择 / 拖影
-    e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动
+    e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动 / 空白创建
     dragActive = true;
+    resizing = true;
     document.body.classList.add("drag-lock");
+    if (e.pointerId !== undefined && el.setPointerCapture) {
+      try { el.setPointerCapture(e.pointerId); } catch (_err) { /* 捕获失败不影响拖拽 */ }
+    }
 
     const restore = () => {
       el.style.top = origTop + "px";
       layoutLane(key);
     };
 
-    /* 每帧都按「指针 y + scrollTop」重新算目标时刻，所以滚动不会累积误差 */
+    /* 每帧都按「指针位置」重算，zoom / 滚动都在 yToMinute 里处理 */
     const updatePreview = () => {
-      targetTs = startTs + (tsAtPoint(pointerY) - grabTs);
-      el.style.top = (yOf(targetTs) + topOffset) + "px";
-      dragtip.textContent = tipLabel(t, key, startTs + snapMs(targetTs - startTs, allDay));
+      if (allDay) {
+        /* 全天卡拖出时间：start 跟着指针，时长按卡片高度折算 */
+        targetTs = snapMinute(yToMinute(pointerY)) * 60000;
+        el.style.top = yOf(targetTs) + "px";
+        dragtip.textContent =
+          hhmm(targetTs) + "–" + hhmm(targetTs + allDayDur * 60000);
+      } else {
+        targetTs = startTs + (tsAtPoint(pointerY) - grabTs);
+        el.style.top = (yOf(targetTs) + topOffset) + "px";
+        dragtip.textContent = tipLabel(t, key, startTs + snapMs(targetTs - startTs, false));
+      }
       dragtip.classList.add("on");
+    };
+
+    const schedule = y => {
+      pendingY = y;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        updatePreview();
+      });
     };
 
     const placeTip = ev => placeDragTip(ev.clientX, ev.clientY);
 
-    const onScroll = () => { if (dragging) updatePreview(); };
+    const onScroll = () => { if (dragging) schedule(pointerY); };
 
     /* 拖拽中按 Esc：取消并归位，不发请求 */
     const onKey = ev => {
@@ -1696,10 +1805,16 @@
 
     const detach = () => {
       dragActive = false;
+      holdResizing();
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       if (stopAuto) { stopAuto(); stopAuto = null; }
+      if (e.pointerId !== undefined && el.releasePointerCapture) {
+        try { el.releasePointerCapture(e.pointerId); } catch (_err) { /* 已释放 */ }
+      }
       window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("blur", onCancel);
       scroll.removeEventListener("scroll", onScroll);
       document.body.classList.remove("drag-lock");
@@ -1707,36 +1822,70 @@
       el.classList.remove("dragging");
     };
 
-    /* 拖到窗口外/切走焦点，收不到 mouseup：取消并归位，别卡在拖拽态 */
+    /* 拖到窗口外/切走焦点，收不到 pointerup：取消并归位，别卡在拖拽态 */
     const onCancel = () => {
       detach();
       restore();
     };
 
     const onMove = ev => {
+      if (e.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
       pointerY = ev.clientY;
       if (!dragging) {
         if (Math.abs(ev.clientY - startClientY) < DRAG_CLICK_PX) return;
         dragging = true;
         el.classList.add("dragging");
-        stopAuto = startAutoScroll(() => pointerY, updatePreview);
+        stopAuto = startAutoScroll(() => pointerY, () => schedule(pointerY));
       }
-      updatePreview();
+      schedule(pointerY);
       placeTip(ev);
     };
 
     const onUp = async () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (dragging) updatePreview();
       detach();
       if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
+      suppressClickOnce();
       el._dragEndedAt = Date.now();
 
-      const minutes = snapMs(targetTs - startTs, allDay) / 60000;
       const api = bridge();
-      if (!minutes || !api) {
+      if (!api) {
         restore();
         return;
       }
       el.style.opacity = ".7";
+
+      if (allDay) {
+        /* 全天 → 定时：start = 松手点（15 分钟吸附），end = start + 高度折算时长 */
+        const startMin = snapMinute(yToMinute(pointerY));
+        const endMin = startMin + allDayDur;
+        const res = await api.resize_task(
+          t.id, TRACK_PROP[key], pointOfMinute(startMin), pointOfMinute(endMin));
+        el.style.opacity = "";
+        if (res && res.ok) {
+          t[key] = (startMin - base / 60000) / 60;
+          t[END_KEY[key]] = (endMin - base / 60000) / 60;
+          t[ALL_DAY_KEY[key]] = false;
+          el.classList.remove("allday");
+          item.y = yOf(base + t[key] * H);
+          const timeSpan = el.querySelector(".row2 span");
+          if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+          applyChipSpanHeight(item);
+        } else {
+          restore();
+          toast("改期失败：" + ((res && res.error) || "未知错误"));
+        }
+        layoutLane(key);
+        return;
+      }
+
+      const minutes = snapMs(tsAtPoint(pointerY) - grabTs, false) / 60000;
+      if (!minutes) {
+        el.style.opacity = "";
+        restore();
+        return;
+      }
       const res = await api.reschedule(t.id, TRACK_PROP[key], minutes);
       el.style.opacity = "";
       if (res && res.ok && res.task) {
@@ -1765,8 +1914,9 @@
     };
 
     window.addEventListener("keydown", onKey, true);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
     window.addEventListener("blur", onCancel);
     scroll.addEventListener("scroll", onScroll, { passive: true });
   }
@@ -1786,7 +1936,7 @@
 
     const linkBtn = el.querySelector(".link");
     if (linkBtn) {
-      linkBtn.addEventListener("mousedown", e => {
+      linkBtn.addEventListener("pointerdown", e => {
         e.preventDefault();     // 别让按钮抢焦点：否则会 scrollIntoView，时间轴会跳
         e.stopPropagation();    // 也别启动拖拽
       });
@@ -1822,14 +1972,14 @@
       e.stopPropagation();
       openCtx(e.clientX, e.clientY, t, el.dataset.status || "");
     });
-    el.addEventListener("mousedown", e => {
+    el.addEventListener("pointerdown", e => {
       if (e.button !== 0) return;                            // 只认左键
       if (e.target.closest(".dot, button, input, .hedge")) return;  // 控件/上下沿不参与整卡拖拽
       startDrag(e, el, t, key);
     });
     el.querySelectorAll(".hedge").forEach(handle => {
       handle.addEventListener("click", e => e.stopPropagation());
-      handle.addEventListener("mousedown", e => {
+      handle.addEventListener("pointerdown", e => {
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
@@ -1942,7 +2092,7 @@
     if (!earliestOverdue) return;
     setTrack("due");
     const target = base + earliestOverdue.due * H;
-    scroll.scrollTo({ top: Math.max(0, yOf(target) - scroll.clientHeight / 2), behavior: "smooth" });
+    scroll.scrollTo({ top: Math.max(0, yOf(target) - contentHalfViewport()), behavior: "smooth" });
     const el = document.querySelector('.chip[data-id="' + earliestOverdue.id + '"]');
     if (!el) return;
     document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
@@ -2019,7 +2169,7 @@
   }
 
   function scrollToNow(animate) {
-    const target = yOf(Date.now()) - scroll.clientHeight / 2;
+    const target = yOf(Date.now()) - contentHalfViewport();
     scroll.scrollTo({ top: Math.max(0, target), behavior: animate ? "smooth" : "auto" });
   }
   updateNowMarker();
@@ -2040,7 +2190,7 @@
       if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
       renderTimeline();
       scroll.scrollTop = Math.max(
-        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
+        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - contentHalfViewport());
       if (res.error) console.warn("刷新回落：", res.error);
     }
     return res;
@@ -2078,7 +2228,7 @@
       layoutLane(key);
     });
 
-    const anchor = ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2;
+    const anchor = ((centerTs - canvasStart) / 60000) * PX_PER_MIN - contentHalfViewport();
     scroll.scrollTop = Math.max(0, anchor);
     return FONT_SCALE;
   }
@@ -2113,8 +2263,8 @@
 
     const rect = scroll.getBoundingClientRect();
     const fromTop = (typeof anchorY === "number")
-      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top))
-      : scroll.clientHeight / 2;
+      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top)) * canvasYRatio()
+      : contentHalfViewport();
     const anchorTs = canvasStart + ((scroll.scrollTop + fromTop) / PX_PER_MIN) * 60000;
 
     PX_PER_HOUR = target;
@@ -2507,19 +2657,26 @@
     b.addEventListener("click", () => setTrack(b.dataset.track)));
   /* ---------- 空白处新建 ---------- */
   let suppressClick = false;
+  let suppressClickTimer = 0;
   let phCard = null;
+
+  /* 拖完吞掉紧随其后的那次 click，避免在松手处又建一条 */
+  function suppressClickOnce() {
+    suppressClick = true;
+    clearTimeout(suppressClickTimer);
+    suppressClickTimer = setTimeout(() => { suppressClick = false; }, 400);
+  }
 
   const GUTTER_PX = 56;
 
   function inLaneX(clientX) {
-    return clientX - scroll.getBoundingClientRect().left >= GUTTER_PX;
+    /* GUTTER_PX 是设计像素，zoom 后按比例换算 */
+    return clientX - scroll.getBoundingClientRect().left >= GUTTER_PX / canvasYRatio();
   }
 
   /* clientY → 绝对分钟数（按 15 分钟吸附） */
   function minuteAt(clientY) {
-    const rect = scroll.getBoundingClientRect();
-    const ts = canvasStart + ((scroll.scrollTop + (clientY - rect.top)) / PX_PER_MIN) * 60000;
-    return Math.round(ts / 60000 / 15) * 15;
+    return snapMinute(yToMinute(clientY));
   }
 
   function pointOfMinute(min) {
@@ -2612,7 +2769,7 @@
       else if (ev.key === "Escape") { ev.preventDefault(); cancel(); }
     });
     input.addEventListener("blur", () => { if (!input.value.trim()) cancel(); });
-    el.addEventListener("mousedown", ev => ev.stopPropagation());
+    el.addEventListener("pointerdown", ev => ev.stopPropagation());
   }
 
   /* 新建后的反馈：滚到可见，并短暂选中 */
@@ -2620,7 +2777,7 @@
     const rect = el.getBoundingClientRect();
     const box = scroll.getBoundingClientRect();
     if (rect.top < box.top + 40 || rect.bottom > box.bottom - 40) {
-      scroll.scrollTop += rect.top - (box.top + box.height / 2);
+      scroll.scrollTop += (rect.top - (box.top + box.height / 2)) * canvasYRatio();
     }
     el.classList.add("sel");
     setTimeout(() => el.classList.remove("sel"), 300);
@@ -2629,6 +2786,7 @@
   /* 单击空白：有弹窗先关，否则建占位卡 */
   scroll.addEventListener("click", e => {
     if (suppressClick) { suppressClick = false; return; }
+    if (dragActive || resizing) return;          // 拖拽刚结束的那一帧不建卡
     if (e.target.closest(".chip, .phcard, button, input")) return;
     if (!inLaneX(e.clientX)) return;
     if (detail.classList.contains("open")) { closeDetail(); return; }
@@ -2639,8 +2797,9 @@
   });
 
   /* 拖拽空白：画时间带，松手后建带起止的占位卡 */
-  scroll.addEventListener("mousedown", e => {
+  scroll.addEventListener("pointerdown", e => {
     if (e.button !== 0) return;
+    if (dragActive || resizing) return;
     if (e.target.closest(".chip, .phcard, button, input")) return;
     if (!inLaneX(e.clientX)) return;
     startBand(e);
@@ -2648,24 +2807,23 @@
 
   function startBand(e) {
     const key = document.getElementById("timeline").dataset.track;
-    const startY = e.clientY;
+    const startClientY = e.clientY;
     const startMin = minuteAt(e.clientY);
     let curMin = startMin;
     let moved = false;
     let band = null;
-    dragActive = true;                 // 禁整卡拖拽 + Ctrl+滚轮缩放
+    let rafId = 0;
+    let pendingY = startClientY;
+    let resized = false;
 
-    const onMove = ev => {
-      const dy = ev.clientY - startY;
-      if (!moved) {
-        if (Math.abs(dy) < 6) return;
-        moved = true;
-        band = document.createElement("div");
-        band.className = "cband";
-        lanes[key].appendChild(band);
-        document.body.classList.add("drag-lock");
-      }
-      curMin = minuteAt(ev.clientY);
+    dragActive = true;                 // 禁整卡拖拽 + Ctrl+滚轮缩放 + 空白拖拽
+    if (e.pointerId !== undefined && scroll.setPointerCapture) {
+      try { scroll.setPointerCapture(e.pointerId); } catch (_err) { /* 忽略 */ }
+    }
+
+    const applyBand = () => {
+      const dy = pendingY - startClientY;
+      curMin = minuteAt(pendingY);
       if (curMin === startMin) curMin = startMin + (dy > 0 ? 15 : -15);   // 最小 15 分钟
       const top = Math.min(startMin, curMin);
       const bottom = Math.max(startMin, curMin);
@@ -2673,10 +2831,41 @@
       band.style.height = Math.max(4, (bottom - top) * PX_PER_MIN) + "px";
     };
 
+    const schedule = y => {
+      pendingY = y;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (band) applyBand();
+      });
+    };
+
+    const onMove = ev => {
+      if (e.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
+      const dy = ev.clientY - startClientY;
+      if (!moved) {
+        if (Math.abs(dy) < 6) return;
+        moved = true;
+        resized = true;
+        resizing = true;
+        band = document.createElement("div");
+        band.className = "cband";
+        lanes[key].appendChild(band);
+        document.body.classList.add("drag-lock");
+      }
+      schedule(ev.clientY);
+    };
+
     const detach = () => {
       dragActive = false;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      if (resized) holdResizing();
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (e.pointerId !== undefined && scroll.releasePointerCapture) {
+        try { scroll.releasePointerCapture(e.pointerId); } catch (_err) { /* 已释放 */ }
+      }
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", detach);
       window.removeEventListener("keydown", onKey, true);
       document.body.classList.remove("drag-lock");
       if (band) { band.remove(); band = null; }
@@ -2690,16 +2879,19 @@
     };
 
     const onUp = () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (moved && band) applyBand();
       detach();
       if (!moved) return;              // 当成单击，交给 click
-      suppressClick = true;
+      suppressClickOnce();
       const top = Math.min(startMin, curMin);
       const bottom = Math.max(startMin, curMin);
       openPlaceholder(TRACK_PROP[key], key, top, bottom);
     };
 
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", detach);
     window.addEventListener("keydown", onKey, true);
   }
 
@@ -2782,7 +2974,7 @@
     const rect = item.el.getBoundingClientRect();
     const box = scroll.getBoundingClientRect();
     if (rect.top < box.top + 44 || rect.bottom > box.bottom - 44) {
-      scroll.scrollTop += rect.top - (box.top + box.height / 2);
+      scroll.scrollTop += (rect.top - (box.top + box.height / 2)) * canvasYRatio();
     }
     return item;
   }
@@ -3493,7 +3685,7 @@
       renderTimeline();
       setTrack(track);
       scroll.scrollTop = Math.max(
-        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - scroll.clientHeight / 2);
+        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - contentHalfViewport());
       return true;
     },
 
@@ -3513,6 +3705,9 @@
     getFontScale() { return FONT_SCALE; },
     resetScale() { resetScale(); return PX_PER_HOUR; },
     clampConfig(patch) { return clampPatch(patch); },
+    /* 坐标换算自测入口（zoom 下应互为逆运算） */
+    yToMinute(clientY) { return yToMinute(clientY); },
+    minuteToY(minute) { return minuteToY(minute); },
   };
 
   const ctx = document.getElementById("ctxmenu");
