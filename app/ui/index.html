@@ -541,6 +541,7 @@
     background: rgba(124,140,255,.12);
     border: 1px solid rgba(124,140,255,.28);
     font-size: 10px; color: #C3C8F0;
+    pointer-events: none;          /* 别挡住下面卡片的拖拽热区 */
   }
   .intro.on { display: flex; }
   .intro span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -548,6 +549,7 @@
     flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px;
     background: transparent; color: var(--faint); cursor: pointer;
     font-size: 13px; line-height: 1;
+    pointer-events: auto;          /* 只有 × 可点 */
   }
   .intro button:hover { background: rgba(255,255,255,.12); color: var(--text); }
 
