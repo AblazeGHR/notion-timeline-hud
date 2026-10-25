@@ -29,7 +29,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SCALE_MIN = 6.0
-SCALE_MAX = 48.0
+SCALE_MAX = 480.0
 FONT_MIN = 0.8
 FONT_MAX = 1.5
 
@@ -100,7 +100,7 @@ def _as_opacity(value: Any) -> float:
 
 def _as_scale(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("timeline_scale 必须是 6~40 的数字")
+        raise ValueError(f"timeline_scale 必须是 {SCALE_MIN:g}~{SCALE_MAX:g} 的数字")
     number = float(value)
     if not SCALE_MIN <= number <= SCALE_MAX:
         raise ValueError(f"timeline_scale 必须在 {SCALE_MIN:g}~{SCALE_MAX:g} 之间")
