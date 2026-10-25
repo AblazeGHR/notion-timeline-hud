@@ -1341,7 +1341,12 @@
 
   const canvas = document.getElementById("canvas");
   const scroll = document.getElementById("scroll");
-  canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
+
+  /* canvas 高度：至少铺满日期范围，同时保证 now 线连着徽标都在内容里 */
+  function timelineHeight() {
+    return Math.ceil(Math.max(DAYS * 24 * PX_PER_HOUR, yOf(Date.now()) + 56));
+  }
+  canvas.style.height = timelineHeight() + "px";
 
   const dayMarks = [];   // 缩放时按 index 重算 top
   const hourLayer = document.createElement("div");
@@ -1973,7 +1978,7 @@
   function renderTimeline() {
     closeDetail();          // 卡片会被重建，弹窗持有的旧对象要丢掉
     computeRange();
-    canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
+    canvas.style.height = timelineHeight() + "px";
     rebuildDayMarks();
     rebuildHourTicks();
     updateNowMarker();
@@ -2102,13 +2107,14 @@
     PX_PER_HOUR = target;
     PX_PER_MIN = target / 60;
 
-    canvas.style.height = (DAYS * 24 * PX_PER_HOUR) + "px";
+    canvas.style.height = timelineHeight() + "px";
     dayMarks.forEach(mark => {
       const y = mark.index * 24 * PX_PER_HOUR;
       mark.line.style.top = y + "px";
       mark.label.style.top = y + "px";
     });
     rebuildHourTicks();
+    updateNowMarker();          // 缩放后按新比例重算，别让 now 线留在旧位置
     ["sched", "due"].forEach(key => {
       items[key].forEach(item => {
         applyChipSpanHeight(item);
