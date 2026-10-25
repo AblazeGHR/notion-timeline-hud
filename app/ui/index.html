@@ -2425,6 +2425,22 @@
   let wheelAnchorTs = 0;
   let wheelAnchorY = 0;
   let wheelIdle = 0;
+  let wheelSaveTimer = 0;
+
+  /* 滚轮停下 500ms 再落盘，快速滚动只写最后一次 */
+  function scheduleScaleSave() {
+    clearTimeout(wheelSaveTimer);
+    wheelSaveTimer = setTimeout(() => {
+      const api = bridge();
+      if (!api || !api.set_config) return;
+      api.set_config({ timeline_scale: PX_PER_HOUR }).then(res => {
+        if (res && res.ok) {
+          DEFAULT_SCALE = clampScale(res.config ? res.config.timeline_scale : PX_PER_HOUR);
+        }
+      }).catch(() => { /* 落盘失败不打扰，下次滚轮再存 */ });
+    }, 500);
+  }
+
   function endWheelZoom() {
     document.body.classList.remove("zooming");
     wheelTarget = 0;
@@ -2444,6 +2460,7 @@
     document.body.classList.add("zooming");
     const factor = deltaY < 0 ? SCALE_WHEEL_FACTOR : 1 / SCALE_WHEEL_FACTOR;
     wheelTarget = clampScale(wheelTarget * factor);
+    scheduleScaleSave();
     clearTimeout(wheelIdle);
     wheelIdle = setTimeout(endWheelZoom, 120);
     if (wheelRaf) return;
