@@ -314,6 +314,7 @@
   .scroll::-webkit-scrollbar { display: none; }
 
   .canvas { position: relative; }
+  .canvas-inner { position: absolute; left: 0; right: 0; top: 0; }
 
   .dayline {
     position: absolute; left: var(--gutter); right: 0; height: 1px;
@@ -1360,12 +1361,25 @@
 
   const canvas = document.getElementById("canvas");
   const scroll = document.getElementById("scroll");
+  /* 所有刻度和卡片放进 inner：首尾 padding 靠平移 inner 实现，时间坐标不变 */
+  const canvasInner = document.createElement("div");
+  canvasInner.className = "canvas-inner";
+  canvas.appendChild(canvasInner);
 
   /* canvas 高度：至少铺满日期范围，同时保证 now 线连着徽标都在内容里 */
   function timelineHeight() {
     return Math.ceil(Math.max(DAYS * 24 * PX_PER_HOUR, yOf(Date.now()) + 56));
   }
-  canvas.style.height = timelineHeight() + "px";
+
+  /* 首尾各留半屏占位，保证 now 在最前/最后也能居中（不改变时间坐标） */
+  let padTop = 0, padBottom = 0;
+  function applyCanvasHeight() {
+    const contentH = timelineHeight();
+    canvas.style.height = (contentH + padTop + padBottom) + "px";
+    canvasInner.style.top = padTop + "px";
+    canvasInner.style.height = contentH + "px";
+  }
+  canvas.style.height = timelineHeight() + "px";   // 首帧还没有 padding
 
   /* ---- 坐标换算唯一入口 ----
      CSS zoom 下 getBoundingClientRect 是缩放后的尺寸，offsetHeight 是布局尺寸；
@@ -1377,19 +1391,44 @@
   /* clientY → 绝对分钟（epoch 分钟，未吸附）；minuteToY 是它的逆运算 */
   function yToMinute(clientY) {
     const rect = canvas.getBoundingClientRect();
-    return canvasStart / 60000 + ((clientY - rect.top) * canvasYRatio()) / PX_PER_MIN;
+    return canvasStart / 60000
+           + (((clientY - rect.top) * canvasYRatio()) - padTop) / PX_PER_MIN;
   }
   function minuteToY(minute) {
     const rect = canvas.getBoundingClientRect();
-    const y = (((minute * 60000) - canvasStart) / 60000) * PX_PER_MIN;
+    const y = padTop + (((minute * 60000) - canvasStart) / 60000) * PX_PER_MIN;
     return rect.top + y / canvasYRatio();
   }
   function snapMinute(minute) {
     return Math.round(minute / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
   }
-  /* 视口半高 → 内容像素（zoom 换算），滚动定位用 */
-  function contentHalfViewport() {
-    return (scroll.clientHeight * canvasYRatio()) / 2;
+  /* 真正可见的时间区：scroll 视口扣掉顶部 trackbar 覆盖和底部抽屉 */
+  function visibleTimeRect() {
+    const box = scroll.getBoundingClientRect();
+    const bar = document.querySelector(".trackbar").getBoundingClientRect();
+    const drawer = document.getElementById("drawer").getBoundingClientRect();
+    const top = Math.max(box.top, bar.bottom);
+    const bottom = Math.min(box.bottom, drawer.top);
+    return { top, bottom, center: (top + bottom) / 2 };
+  }
+
+  /* 目标时刻落在可见时间区正中的 scrollTop */
+  function centeredScrollTop(ts) {
+    const box = scroll.getBoundingClientRect();
+    const view = visibleTimeRect();
+    const offset = (view.center - box.top) * canvasYRatio();
+    return Math.max(0, padTop + ((ts - canvasStart) / 60000) * PX_PER_MIN - offset);
+  }
+
+  /* padding 随可见区变化重算；内容整体下移，scroll 定位统一走 centeredScrollTop */
+  function updateCanvasPadding() {
+    const view = visibleTimeRect();
+    const half = Math.ceil(((view.bottom - view.top) / 2) * canvasYRatio());
+    if (half === padTop && half === padBottom) return;
+    padTop = padBottom = half;
+    canvas.style.paddingTop = padTop + "px";
+    canvas.style.paddingBottom = padBottom + "px";
+    applyCanvasHeight();
   }
 
   const dayMarks = [];   // 缩放时按 index 重算 top
@@ -1407,7 +1446,7 @@
     const line = document.createElement("div");
     line.className = "dayline";
     line.style.top = y + "px";
-    canvas.appendChild(line);
+    canvasInner.appendChild(line);
 
     const isToday = d.toDateString() === NOW.toDateString();
     const label = document.createElement("div");
@@ -1417,12 +1456,12 @@
       '<span class="row"><span class="num">' + d.getDate() + '</span>' +
       '<span class="wd">' + WEEK[d.getDay()].replace("周", "") + '</span></span>' +
       (isToday ? '<span class="today-pill">今天</span>' : "");
-    canvas.appendChild(label);
+    canvasInner.appendChild(label);
     dayMarks.push({ index: i, line, label });
     }
   }
   rebuildDayMarks();
-  canvas.appendChild(hourLayer);
+  canvasInner.appendChild(hourLayer);
   syncHourTicks(true);
 
   const lanes = {
@@ -1433,8 +1472,8 @@
   lanes.due.dataset.track = "due";
   lanes.sched.style.setProperty("--lane-color", "var(--sched)");
   lanes.due.style.setProperty("--lane-color", "var(--due)");
-  canvas.appendChild(lanes.sched);
-  canvas.appendChild(lanes.due);
+  canvasInner.appendChild(lanes.sched);
+  canvasInner.appendChild(lanes.due);
 
   const items = { sched: [], due: [] };
 
@@ -2136,7 +2175,7 @@
     if (!earliestOverdue) return;
     setTrack("due");
     const target = base + earliestOverdue.due * H;
-    scroll.scrollTo({ top: Math.max(0, yOf(target) - contentHalfViewport()), behavior: "smooth" });
+    scroll.scrollTo({ top: centeredScrollTop(target), behavior: "smooth" });
     const el = document.querySelector('.chip[data-id="' + earliestOverdue.id + '"]');
     if (!el) return;
     document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
@@ -2174,7 +2213,7 @@
   function renderTimeline() {
     closeDetail();          // 卡片会被重建，弹窗持有的旧对象要丢掉
     computeRange();
-    canvas.style.height = timelineHeight() + "px";
+    applyCanvasHeight();
     rebuildDayMarks();
     syncHourTicks(true);         // 日期范围可能变了，强制重建
     updateNowMarker();
@@ -2200,8 +2239,8 @@
   /* now 标记写进 canvas：随内容滚动，每 30s 刷新位置与时间 */
   const nowlineEl = document.getElementById("nowline");
   const nowbadgeEl = document.querySelector(".nowbadge");
-  canvas.insertBefore(nowlineEl, lanes.sched);   // 线在卡片下面
-  canvas.appendChild(nowbadgeEl);                // 徽标在最上面
+  canvasInner.insertBefore(nowlineEl, lanes.sched);   // 线在卡片下面
+  canvasInner.appendChild(nowbadgeEl);                // 徽标在最上面
 
   function updateNowMarker() {
     const ts = Date.now();
@@ -2213,13 +2252,26 @@
   }
 
   function scrollToNow(animate) {
-    const target = yOf(Date.now()) - contentHalfViewport();
-    scroll.scrollTo({ top: Math.max(0, target), behavior: animate ? "smooth" : "auto" });
+    const target = centeredScrollTop(Date.now());
+    if (animate) scroll.scrollTo({ top: target, behavior: "smooth" });
+    else scroll.scrollTop = target;
+  }
+
+  /* 可见时间区居中：先按当前布局重算首尾 padding，再滚 */
+  function centerOnNow() {
+    updateCanvasPadding();
+    scrollToNow(false);
   }
   updateNowMarker();
   setInterval(updateNowMarker, 30_000);
-  requestAnimationFrame(() => scrollToNow(false));
-  window.addEventListener("resize", () => scrollToNow(false));
+  requestAnimationFrame(() => {
+    updateCanvasPadding();
+    scrollToNow(false);
+  });
+  window.addEventListener("resize", () => {
+    updateCanvasPadding();
+    scrollToNow(false);
+  });
 
   /* 空格：回到当前时间（输入框/按钮/弹窗/拖拽/改键时不抢） */
   window.addEventListener("keydown", e => {
@@ -2235,7 +2287,7 @@
       return;
     }
     e.preventDefault();
-    scrollToNow(false);
+    centerOnNow();
   });
 
   /* 刷新数据（按钮 / 托盘共用）：保持当前视口中线时刻 */
@@ -2251,8 +2303,7 @@
       undated.push(...(res.data.undated || []));
       if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
       renderTimeline();
-      scroll.scrollTop = Math.max(
-        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - contentHalfViewport());
+      scroll.scrollTop = centeredScrollTop(centerTs);
       if (res.error) console.warn("刷新回落：", res.error);
     }
     return res;
@@ -2291,8 +2342,7 @@
       layoutLane(key);
     });
 
-    const anchor = ((centerTs - canvasStart) / 60000) * PX_PER_MIN - contentHalfViewport();
-    scroll.scrollTop = Math.max(0, anchor);
+    scroll.scrollTop = centeredScrollTop(centerTs);
     return FONT_SCALE;
   }
 
@@ -2327,7 +2377,7 @@
     PX_PER_HOUR = target;
     PX_PER_MIN = target / 60;
 
-    canvas.style.height = timelineHeight() + "px";
+    applyCanvasHeight();
     dayMarks.forEach(mark => {
       const y = mark.index * 24 * PX_PER_HOUR;
       mark.line.style.top = y + "px";
@@ -2351,9 +2401,10 @@
     });
     const rect = scroll.getBoundingClientRect();
     const fromTop = (typeof anchorY === "number")
-      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top)) * canvasYRatio()
-      : contentHalfViewport();
-    scroll.scrollTop = Math.max(0, ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
+      ? (anchorY - rect.top) * canvasYRatio()
+      : (visibleTimeRect().center - rect.top) * canvasYRatio();
+    scroll.scrollTop = Math.max(
+      0, padTop + ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
     updateScaleLabel();
     return PX_PER_HOUR;
   }
@@ -2362,11 +2413,9 @@
   function applyScale(next, anchorY) {
     const target = clampScale(next);
     if (dragActive || target === PX_PER_HOUR) return PX_PER_HOUR;
-    const rect = scroll.getBoundingClientRect();
-    const fromTop = (typeof anchorY === "number")
-      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top)) * canvasYRatio()
-      : contentHalfViewport();
-    const anchorTs = canvasStart + ((scroll.scrollTop + fromTop) / PX_PER_MIN) * 60000;
+    const anchorTs = (typeof anchorY === "number")
+      ? yToMinute(anchorY) * 60000
+      : yToMinute(visibleTimeRect().center) * 60000;
     return applyScaleTo(target, anchorTs, anchorY);
   }
 
@@ -2376,7 +2425,6 @@
   let wheelAnchorTs = 0;
   let wheelAnchorY = 0;
   let wheelIdle = 0;
-
   function endWheelZoom() {
     document.body.classList.remove("zooming");
     wheelTarget = 0;
@@ -3797,8 +3845,7 @@
       if (data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, data);
       renderTimeline();
       setTrack(track);
-      scroll.scrollTop = Math.max(
-        0, ((centerTs - canvasStart) / 60000) * PX_PER_MIN - contentHalfViewport());
+      scroll.scrollTop = centeredScrollTop(centerTs);
       return true;
     },
 
@@ -3817,7 +3864,13 @@
     setFontScale(value) { return applyFontScale(value); },
     getFontScale() { return FONT_SCALE; },
     resetScale() { resetScale(); return PX_PER_HOUR; },
-    scrollToNow() { scrollToNow(false); return true; },
+    scrollToNow() {
+      requestAnimationFrame(() => {
+        centerOnNow();
+        setTimeout(centerOnNow, 120);   // 字体/布局稳定后再校正一次
+      });
+      return true;
+    },
     clampConfig(patch) { return clampPatch(patch); },
     /* 坐标换算自测入口（zoom 下应互为逆运算） */
     yToMinute(clientY) { return yToMinute(clientY); },
