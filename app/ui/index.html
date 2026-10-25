@@ -22,7 +22,7 @@
     --doing: #F5A524;
     --done: #30C48D;
     --empty: #3F4550;
-    --gutter: 56px;
+    --gutter: calc(56px + (var(--font-scale) - 1) * 14px);
     --radius: 20px;
   }
 
@@ -320,16 +320,22 @@
     background: linear-gradient(90deg, rgba(255,255,255,.1), rgba(255,255,255,.022) 62%, transparent);
   }
   .daylabel {
-    position: absolute; left: 0; width: var(--gutter);
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    position: absolute; left: 4px; width: auto;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
     transform: translateY(-50%);
     font-variant-numeric: tabular-nums;
     color: var(--faint);
     z-index: 4;
   }
   .daylabel .row { display: flex; align-items: baseline; gap: 2px; }
-  .daylabel .num { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
-  .daylabel .wd  { font-size: 9px; letter-spacing: .04em; }
+  .daylabel .num {
+    font-size: calc(13px * (1 + (var(--font-scale) - 1) * 0.6));
+    font-weight: 600; letter-spacing: .2px;
+  }
+  .daylabel .wd {
+    font-size: calc(9px * (1 + (var(--font-scale) - 1) * 0.6));
+    letter-spacing: .04em;
+  }
   .daylabel.today { transform: translateY(2px); }
   .daylabel.today .num { color: var(--accent); }
   .daylabel.today .wd  { color: rgba(124,140,255,.75); }
@@ -460,7 +466,7 @@
   }
   .hourline.half { background: rgba(255,255,255,.06); }   /* 120+ 档的半小时线，再淡一档 */
   .hourlabel {
-    position: absolute; right: calc(100% - var(--gutter) + 6px);
+    position: absolute; right: calc(100% - var(--gutter) + 2px);
     font-size: 9.5px; color: #A8AAB8;
     line-height: 1.15; white-space: nowrap;
     padding: 1px 4px; border-radius: 4px;
@@ -2004,7 +2010,7 @@
   }
 
   /* 小时刻度分档：>=10 小时线；>=18 每 6h 标签；>=28 每 3h；>=36 每小时（00–23）；
-     >=120 再加半小时线。标签最小间距 14px，冲突就隔一个。 */
+     >=120 再加半小时线。标签最小间距 16px * 字号缩放，冲突就隔一个。 */
   const HOUR_LABEL_GAP = 14;
   function rebuildHourTicks() {
     hourLayer.innerHTML = "";
@@ -2687,11 +2693,10 @@
     suppressClickTimer = setTimeout(() => { suppressClick = false; }, 400);
   }
 
-  const GUTTER_PX = 56;
-
   function inLaneX(clientX) {
-    /* GUTTER_PX 是设计像素，zoom 后按比例换算 */
-    return clientX - scroll.getBoundingClientRect().left >= GUTTER_PX / canvasYRatio();
+    /* 直接用当前轨道左边界：--gutter 会随字号变宽，不能写死 56 */
+    const key = document.getElementById("timeline").dataset.track;
+    return clientX >= lanes[key].getBoundingClientRect().left;
   }
 
   /* clientY → 绝对分钟数（按 15 分钟吸附） */
