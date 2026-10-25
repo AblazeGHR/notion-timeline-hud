@@ -2282,17 +2282,11 @@
     if (sliderEl) sliderEl.value = String(sliderFromScale(PX_PER_HOUR));
   }
 
-  /* 换密度并重排。anchorY 是视口坐标：缩放前后该 y 下的时刻不动 */
-  function applyScale(next, anchorY) {
-    const target = clampScale(next);
+  /* 真正落地的缩放：锚点时刻由调用方固定，连续缩放不会累积漂移 */
+  function applyScaleTo(target, anchorTs, anchorY) {
+    target = clampScale(target);
     if (dragActive) return PX_PER_HOUR;   // 拖拽中不缩放（见 dragActive 注释）
     if (target === PX_PER_HOUR) return PX_PER_HOUR;
-
-    const rect = scroll.getBoundingClientRect();
-    const fromTop = (typeof anchorY === "number")
-      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top)) * canvasYRatio()
-      : contentHalfViewport();
-    const anchorTs = canvasStart + ((scroll.scrollTop + fromTop) / PX_PER_MIN) * 60000;
 
     PX_PER_HOUR = target;
     PX_PER_MIN = target / 60;
@@ -2312,9 +2306,49 @@
       });
       layoutLane(key);   // 重算避让与 tick
     });
+    const rect = scroll.getBoundingClientRect();
+    const fromTop = (typeof anchorY === "number")
+      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top)) * canvasYRatio()
+      : contentHalfViewport();
     scroll.scrollTop = Math.max(0, ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
     updateScaleLabel();
     return PX_PER_HOUR;
+  }
+
+  /* 滑杆/重置等一次性缩放：先按当前状态算锚点，再交给 applyScaleTo */
+  function applyScale(next, anchorY) {
+    const target = clampScale(next);
+    if (dragActive || target === PX_PER_HOUR) return PX_PER_HOUR;
+    const rect = scroll.getBoundingClientRect();
+    const fromTop = (typeof anchorY === "number")
+      ? Math.min(scroll.clientHeight, Math.max(0, anchorY - rect.top)) * canvasYRatio()
+      : contentHalfViewport();
+    const anchorTs = canvasStart + ((scroll.scrollTop + fromTop) / PX_PER_MIN) * 60000;
+    return applyScaleTo(target, anchorTs, anchorY);
+  }
+
+  /* Ctrl+滚轮：几何累加目标值，每帧最多落地一次；锚点整段手势固定 */
+  let wheelRaf = 0;
+  let wheelTarget = 0;
+  let wheelAnchorTs = 0;
+  let wheelAnchorY = 0;
+  let wheelIdle = 0;
+
+  function queueWheelZoom(deltaY, clientY) {
+    if (!wheelAnchorTs) {
+      wheelAnchorY = clientY;
+      wheelAnchorTs = tsAtPoint(clientY);   // 手势开始时指针下的时刻
+      wheelTarget = PX_PER_HOUR;
+    }
+    const factor = deltaY < 0 ? SCALE_WHEEL_FACTOR : 1 / SCALE_WHEEL_FACTOR;
+    wheelTarget = clampScale(wheelTarget * factor);
+    clearTimeout(wheelIdle);
+    wheelIdle = setTimeout(() => { wheelTarget = 0; wheelAnchorTs = 0; }, 160);
+    if (wheelRaf) return;
+    wheelRaf = requestAnimationFrame(() => {
+      wheelRaf = 0;
+      if (wheelTarget) applyScaleTo(wheelTarget, wheelAnchorTs, wheelAnchorY);
+    });
   }
 
   /* 隐藏后回默认值；居中到 now */
@@ -2667,8 +2701,7 @@
     if (!e.ctrlKey) return;
     e.preventDefault();
     e.stopPropagation();
-    const next = PX_PER_HOUR * (e.deltaY < 0 ? SCALE_WHEEL_FACTOR : 1 / SCALE_WHEEL_FACTOR);
-    applyScale(next, e.clientY);
+    queueWheelZoom(e.deltaY, e.clientY);
   }, { passive: false });
 
   document.getElementById("cntSched").textContent = tasks.filter(t => typeof t.sched === "number").length;
