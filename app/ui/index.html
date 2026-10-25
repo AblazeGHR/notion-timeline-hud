@@ -378,7 +378,7 @@
     cursor: default;
     user-select: none;
     min-height: calc(30px * var(--font-scale, 1));
-    transition: transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s;
+    transition: background .14s ease, border-color .14s ease, box-shadow .14s;
   }
   .chip:hover {
     transform: translateY(-1px);
@@ -394,6 +394,9 @@
     z-index: 21 !important;
   }
   .chip.overdue { opacity: .62; }
+  /* 连续缩放时降级：过渡/阴影/模糊都停掉，松手 120ms 后恢复 */
+  body.zooming .chip,
+  body.zooming .lane { transition: none !important; box-shadow: none !important; backdrop-filter: none !important; }
   .chip.done .t { text-decoration: line-through; text-decoration-color: rgba(255,255,255,.28); color: #9B9CA6; }
 
   .chip .row1 { display: flex; align-items: flex-start; gap: 5px; }
@@ -1467,6 +1470,19 @@
     return h;
   }
 
+  /* 缩放中的快速改高：只用缓存 baseH + 时间差，不触发 layout 读取 */
+  function applyChipHeightFast(item) {
+    const el = item.el, t = item.t, key = item.key;
+    const baseH = el._baseH || 30;
+    const end = t[END_KEY[key]];
+    let h = baseH;
+    if (!t[ALL_DAY_KEY[key]] && typeof end === "number" && end > t[key]) {
+      h = Math.max(baseH, (end - t[key]) * 60 * PX_PER_MIN);
+    }
+    el.style.height = h === baseH ? "" : h + "px";
+    item.h = h;
+  }
+
   /* 上下沿拖动：上沿改 start（end 固定），下沿改 end（start 固定） */
   function startEdgeDrag(e, el, t, key, side) {
     const item = items[key].find(it => it.el === el);
@@ -2303,7 +2319,7 @@
   }
 
   /* 真正落地的缩放：锚点时刻由调用方固定，连续缩放不会累积漂移 */
-  function applyScaleTo(target, anchorTs, anchorY) {
+  function applyScaleTo(target, anchorTs, anchorY, fast) {
     target = clampScale(target);
     if (dragActive) return PX_PER_HOUR;   // 拖拽中不缩放（见 dragActive 注释）
     if (target === PX_PER_HOUR) return PX_PER_HOUR;
@@ -2317,14 +2333,21 @@
       mark.line.style.top = y + "px";
       mark.label.style.top = y + "px";
     });
-    syncHourTicks();             // 档位不变就只改 --pxh，不重建几百个节点
+    if (fast) {
+      /* 缩放中只改 --pxh；档位重建推迟到松手后的完整重排 */
+      hourLayer.style.setProperty("--pxh", PX_PER_HOUR + "px");
+    } else {
+      syncHourTicks();           // 档位不变就只改 --pxh，不重建几百个节点
+    }
     updateNowMarker();          // 缩放后按新比例重算，别让 now 线留在旧位置
     ["sched", "due"].forEach(key => {
       items[key].forEach(item => {
-        applyChipSpanHeight(item);
+        if (fast) applyChipHeightFast(item);
+        else applyChipSpanHeight(item);
         item.y = yOf(base + item.t[item.key] * H);
+        if (fast) item.el.style.top = item.y + "px";   // 缩放中不做避让，先跟住时间
       });
-      layoutLane(key);   // 重算避让与 tick
+      if (!fast) layoutLane(key);   // 重算避让与 tick
     });
     const rect = scroll.getBoundingClientRect();
     const fromTop = (typeof anchorY === "number")
@@ -2354,20 +2377,31 @@
   let wheelAnchorY = 0;
   let wheelIdle = 0;
 
+  function endWheelZoom() {
+    document.body.classList.remove("zooming");
+    wheelTarget = 0;
+    wheelAnchorTs = 0;
+    /* 松手后补一次完整重排：避让、刻度、now 线都回到精确位置 */
+    syncHourTicks();          // 档位没变就不重建，只把 --pxh 落到最新
+    ["sched", "due"].forEach(key => layoutLane(key));
+    updateNowMarker();
+  }
+
   function queueWheelZoom(deltaY, clientY) {
     if (!wheelAnchorTs) {
       wheelAnchorY = clientY;
       wheelAnchorTs = tsAtPoint(clientY);   // 手势开始时指针下的时刻
       wheelTarget = PX_PER_HOUR;
     }
+    document.body.classList.add("zooming");
     const factor = deltaY < 0 ? SCALE_WHEEL_FACTOR : 1 / SCALE_WHEEL_FACTOR;
     wheelTarget = clampScale(wheelTarget * factor);
     clearTimeout(wheelIdle);
-    wheelIdle = setTimeout(() => { wheelTarget = 0; wheelAnchorTs = 0; }, 160);
+    wheelIdle = setTimeout(endWheelZoom, 120);
     if (wheelRaf) return;
     wheelRaf = requestAnimationFrame(() => {
       wheelRaf = 0;
-      if (wheelTarget) applyScaleTo(wheelTarget, wheelAnchorTs, wheelAnchorY);
+      if (wheelTarget) applyScaleTo(wheelTarget, wheelAnchorTs, wheelAnchorY, true);
     });
   }
 
