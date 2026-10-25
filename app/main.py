@@ -811,6 +811,10 @@ def show_window(window: webview.Window) -> None:
         window.evaluate_js("window.__hud && window.__hud.markIntroSeen()")
     except Exception:  # noqa: BLE001
         pass
+    try:   # 每次唤出都回到「现在」，不管上次滚到哪
+        window.evaluate_js("window.__hud && window.__hud.scrollToNow()")
+    except Exception:  # noqa: BLE001
+        pass
     state["visible"] = True
     state["shown_at"] = time.time()
 

@@ -3704,6 +3704,7 @@
     setFontScale(value) { return applyFontScale(value); },
     getFontScale() { return FONT_SCALE; },
     resetScale() { resetScale(); return PX_PER_HOUR; },
+    scrollToNow() { scrollToNow(false); return true; },
     clampConfig(patch) { return clampPatch(patch); },
     /* 坐标换算自测入口（zoom 下应互为逆运算） */
     yToMinute(clientY) { return yToMinute(clientY); },
