@@ -21,11 +21,18 @@ from notion_timeline.api_client import NotionClient, load_dotenv  # noqa: E402
 from notion_timeline.cache_reader import read_tasks  # noqa: E402
 from notion_timeline.models import Task  # noqa: E402
 
-DATA_SOURCE_ID = (
-    os.environ.get("NOTION_DATA_SOURCE_ID", "").strip()
-    or load_dotenv().get("NOTION_DATA_SOURCE_ID", "").strip()
-    or "31c55e1d-4f6d-80a2-8f74-000b970d5404"
-)
+def _resolve_data_source_id() -> str:
+    """数据源 id 只从环境变量 / .env 读，缺失直接报错，不猜默认值。"""
+    value = (
+        os.environ.get("NOTION_DATA_SOURCE_ID", "").strip()
+        or load_dotenv().get("NOTION_DATA_SOURCE_ID", "").strip()
+    )
+    if not value:
+        raise RuntimeError("缺少 NOTION_DATA_SOURCE_ID，请配置环境变量或 .env")
+    return value
+
+
+DATA_SOURCE_ID = _resolve_data_source_id()
 
 _STATUS = {
     "未开始": "todo",

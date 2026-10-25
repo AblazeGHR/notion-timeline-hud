@@ -11,7 +11,7 @@
 ## 2. 数据源事实（2026-10-24 本机实测）
 
 - 本地缓存：`%APPDATA%\Notion\notion.db`（SQLite，**只读**，桌面端运行时秒级同步，关闭后冻结）。
-- 目标库：「日程与任务数据库」，`collection_id = 31c55e1d-4f6d-80a2-8f74-000b970d5404`。
+- 目标库：「日程与任务数据库」，`collection_id = <DATA_SOURCE_ID>`。
 - **这个 id 是 data source id，不是 database id**：`GET /v1/databases/{id}` 会 404，必须走
   `GET /v1/data_sources/{id}` 与 `POST /v1/data_sources/{id}/query`。写页面时 `parent` 用
   `{"type": "data_source_id", "data_source_id": ...}`。

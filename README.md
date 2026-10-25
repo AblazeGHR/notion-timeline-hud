@@ -29,6 +29,8 @@ E:/software/miniforge/python.exe app/main.py --autostart on|off
 依赖：Python 3.11+、`pywebview`（WebView2 运行时）、`httpx`、`python-dotenv`、
 `pystray` + `Pillow`（托盘图标；缺失时只记日志，主程序照常运行）。
 Notion token 放在环境变量 `NOTION_TOKEN` 或仓库根 `.env`（`.env` 已被 gitignore）。
+数据源 id 必须配在 `NOTION_DATA_SOURCE_ID`（环境变量或 `.env`）；缺失会直接报
+「缺少 NOTION_DATA_SOURCE_ID，请配置环境变量或 .env」，不会猜默认库。
 
 ## 热键
 

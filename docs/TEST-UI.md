@@ -57,7 +57,7 @@ E:/software/miniforge/python.exe d:/project/notion_plugin/app/main.py
 > 默认写正式库。要安全测试，先用测试库启动：
 >
 > ```powershell
-> $env:NOTION_DATA_SOURCE_ID="faa123f9-4216-4f67-be07-ce63ab9222df"
+> $env:NOTION_DATA_SOURCE_ID="<TEST_DATA_SOURCE_ID>"
 > cd D:\project\notion_plugin; E:\software\miniforge\python.exe app\main.py --keep-open
 > ```
 
