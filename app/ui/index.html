@@ -467,13 +467,14 @@
   .hourline.half { background: rgba(255,255,255,.06); }   /* 120+ 档的半小时线，再淡一档 */
   .hourlabel {
     position: absolute; right: calc(100% - var(--gutter) + 2px);
-    font-size: 9.5px; color: #A8AAB8;
+    font-size: calc(11px * var(--font-scale, 1)); color: #A8AAB8;
     line-height: 1.15; white-space: nowrap;
     padding: 1px 4px; border-radius: 4px;
     background: rgba(0,0,0,.35);            /* 整点标签垫一层，压住穿过的线条 */
     transform: translateY(-50%);
     font-variant-numeric: tabular-nums;
   }
+  .hourlabel.midnight { padding-left: 2px; padding-right: 2px; }
 
   /* ---------------- 拖拽改期 ---------------- */
   body.drag-lock,
@@ -2011,13 +2012,13 @@
 
   /* 小时刻度分档：>=10 小时线；>=18 每 6h 标签；>=28 每 3h；>=36 每小时（00–23）；
      >=120 再加半小时线。标签最小间距 16px * 字号缩放，冲突就隔一个。 */
-  const HOUR_LABEL_GAP = 14;
+  const HOUR_LABEL_GAP = 16;
   function rebuildHourTicks() {
     hourLayer.innerHTML = "";
     if (PX_PER_HOUR < 10) return;
     const step = PX_PER_HOUR >= 120 ? 0.5 : 1;       // 120 档半小时一条线
     let labelEvery = PX_PER_HOUR >= 36 ? 1 : (PX_PER_HOUR >= 28 ? 3 : (PX_PER_HOUR >= 18 ? 6 : 0));
-    while (labelEvery && labelEvery * PX_PER_HOUR < HOUR_LABEL_GAP) labelEvery *= 2;
+    while (labelEvery && labelEvery * PX_PER_HOUR < HOUR_LABEL_GAP * FONT_SCALE) labelEvery *= 2;
     const totalHours = DAYS * 24;
     for (let i = 1; i < totalHours / step; i++) {
       const h = i * step;
@@ -2031,9 +2032,8 @@
       }
       if (labelEvery && Math.abs(h % labelEvery) < 1e-9) {
         const label = document.createElement("div");
-        label.className = "hourlabel";
-        // 00 与日期标签同 y，往下让开一点，避免文字叠在一起
-        label.style.top = (midnight ? y + 22 : y) + "px";
+        label.className = "hourlabel" + (midnight ? " midnight" : "");
+        label.style.top = y + "px";
         label.textContent = String(Math.round(h) % 24).padStart(2, "0");
         hourLayer.appendChild(label);
       }
@@ -2248,6 +2248,7 @@
     FONT_SCALE = clampFont(value);
     document.documentElement.style.setProperty("--font-scale", String(FONT_SCALE));
     updateFontLabel();
+    rebuildHourTicks();        // 字号变了，标签最小间距跟着变
     // 字变了 → 卡片高度变了，重新量高并重排（不影响 px/hour）
     ["sched", "due"].forEach(key => {
       items[key].forEach(item => applyChipSpanHeight(item));
