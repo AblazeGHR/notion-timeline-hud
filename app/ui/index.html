@@ -1844,24 +1844,32 @@
     hint.classList.toggle("on", shown.length === 0);
   }
 
-  /* 小时刻度：>=18px/h 出细线；>=30 每 6h 标签（00/06/12/18）；>=44 每 2h 标签 */
+  /* 小时刻度分档：>=10 小时线；>=18 每 6h 标签；>=28 每 3h；>=36 每小时（00–23）；
+     >=120 再加半小时线。标签最小间距 14px，冲突就隔一个。 */
+  const HOUR_LABEL_GAP = 14;
   function rebuildHourTicks() {
     hourLayer.innerHTML = "";
-    if (PX_PER_HOUR < 18) return;
-    const labelEvery = PX_PER_HOUR >= 44 ? 2 : (PX_PER_HOUR >= 30 ? 6 : 0);
-    const total = DAYS * 24;
-    for (let h = 1; h < total; h++) {
-      if (h % 24 === 0) continue;            // 整点日界交给 dayline
+    if (PX_PER_HOUR < 10) return;
+    const step = PX_PER_HOUR >= 120 ? 0.5 : 1;       // 120 档半小时一条线
+    let labelEvery = PX_PER_HOUR >= 36 ? 1 : (PX_PER_HOUR >= 28 ? 3 : (PX_PER_HOUR >= 18 ? 6 : 0));
+    while (labelEvery && labelEvery * PX_PER_HOUR < HOUR_LABEL_GAP) labelEvery *= 2;
+    const totalHours = DAYS * 24;
+    for (let i = 1; i < totalHours / step; i++) {
+      const h = i * step;
+      const midnight = Math.abs(h % 24) < 1e-9;
       const y = h * PX_PER_HOUR;
-      const line = document.createElement("div");
-      line.className = "hourline";
-      line.style.top = y + "px";
-      hourLayer.appendChild(line);
-      if (labelEvery && h % labelEvery === 0) {
+      if (!midnight) {                       // 日界已有 dayline，不画重复线
+        const line = document.createElement("div");
+        line.className = "hourline";
+        line.style.top = y + "px";
+        hourLayer.appendChild(line);
+      }
+      if (labelEvery && Math.abs(h % labelEvery) < 1e-9) {
         const label = document.createElement("div");
         label.className = "hourlabel";
-        label.style.top = y + "px";
-        label.textContent = String(h % 24).padStart(2, "0");
+        // 00 与日期标签同 y，往下让开一点，避免文字叠在一起
+        label.style.top = (midnight ? y + 22 : y) + "px";
+        label.textContent = String(Math.round(h) % 24).padStart(2, "0");
         hourLayer.appendChild(label);
       }
     }
