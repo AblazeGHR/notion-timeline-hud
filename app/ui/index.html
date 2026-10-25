@@ -2176,6 +2176,24 @@
   setInterval(updateNowMarker, 30_000);
   requestAnimationFrame(() => scrollToNow(false));
   window.addEventListener("resize", () => scrollToNow(false));
+
+  /* 空格：回到当前时间（输入框/按钮/弹窗/拖拽/改键时不抢） */
+  window.addEventListener("keydown", e => {
+    if (e.code !== "Space" || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
+    const el = document.activeElement;
+    if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(el.tagName))) return;
+    if (document.getElementById("hotkeyRow").classList.contains("capturing")) return;
+    if (dragActive || resizing) return;
+    /* 弹窗开着：吃掉默认滚动，但也别把时间轴拉回去 */
+    if (document.getElementById("detail").classList.contains("open") ||
+        document.getElementById("modal").classList.contains("open")) {
+      e.preventDefault();
+      return;
+    }
+    e.preventDefault();
+    scrollToNow(false);
+  });
+
   /* 刷新数据（按钮 / 托盘共用）：保持当前视口中线时刻 */
   async function refreshData() {
     const api = bridge();
