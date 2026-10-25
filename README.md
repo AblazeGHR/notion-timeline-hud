@@ -38,6 +38,7 @@ Notion token 放在环境变量 `NOTION_TOKEN` 或仓库根 `.env`（`.env` 已�
 |---|---|
 | `Ctrl+Alt+Space`（默认，可在设置里改） | 唤出 / 收起窗口 |
 | `Ctrl+Alt+Q` | 退出进程 |
+| `Space` | 回到当前时间（输入框、弹窗、拖拽时不生效） |
 
 热键改了之后若被别的程序占用，`set_config` 会失败并把设置回滚。
 
