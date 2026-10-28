@@ -230,47 +230,32 @@
   }
   .chip.hide, .ditem.hide { display: none; }
 
-  /* ---------------- 置顶全天任务 ---------------- */
-  .allstrip {
-    position: relative;
-    flex: none;
-    display: flex; align-items: center;
-    margin: 0 14px 8px;
-    height: 28px;                             /* 固定一行：跨天不改变高度 */
-    padding: 0 10px;
-    border-radius: 9px;
-    background: rgba(255,255,255,.045);
-    border: 1px solid rgba(255,255,255,.07);
-    gap: 8px;
+  /* ---------------- 每日全天行（画在时间线内，滚动吸顶） ---------------- */
+  .allday-row {
+    position: absolute; left: var(--gutter); right: 8px; height: 28px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px; border-radius: 8px;
+    background: rgba(16,17,23,.82);
+    border: 1px solid rgba(255,255,255,.055);
+    z-index: 5;                              /* 高于 lane(1)，低于 nowbadge(30) */
+    pointer-events: none;                    /* 空白处不挡轨道操作 */
   }
-  .allstrip.fade { animation: allfade .12s ease; }
-  .allstrip.dropping {
-    border-color: rgba(124,140,255,.55);
-    background: rgba(124,140,255,.12);
+  .allday-row.pinned {
+    background: rgba(20,21,29,.985);
+    border-color: rgba(255,255,255,.13);
+    box-shadow: 0 8px 18px -10px rgba(0,0,0,.95);
   }
-  .allstrip.dropping::after {
-    content: "放开转为全天";
-    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-    padding: 2px 8px; border-radius: 5px;
-    background: rgba(124,140,255,.24);
-    border: 1px solid rgba(124,140,255,.45);
-    color: #DDE1FF; font-size: 9.5px; white-space: nowrap;
-    pointer-events: none;
+  .allday-row.drop {
+    border-color: rgba(124,140,255,.6);
+    background: rgba(124,140,255,.2);
   }
-  @keyframes allfade { from { opacity: 0; } to { opacity: 1; } }
-  .allstrip .alllabel {
-    flex: none;
-    font-size: 9.5px; color: var(--faint); letter-spacing: .04em;
-    font-variant-numeric: tabular-nums;
+  .allday-row .adate {
+    flex: none; font-size: 9.5px; color: var(--faint);
+    letter-spacing: .04em; font-variant-numeric: tabular-nums;
   }
-  .allitems {
-    flex: 1; min-width: 0;
-    display: flex; align-items: center; gap: 6px;
+  .allday-row .aitems {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
     overflow: hidden;
-  }
-  .allempty {
-    flex: 1; text-align: right;
-    font-size: 9.5px; color: var(--faint); opacity: .55;
   }
   .allitem {
     flex: none; max-width: 180px; height: 18px; padding: 0 7px;
@@ -278,16 +263,16 @@
     border: 1px solid rgba(255,255,255,.07); border-radius: 6px;
     background: rgba(255,255,255,.055);
     color: var(--dim); font-family: inherit; font-size: 10.5px;
-    cursor: pointer; white-space: nowrap;
+    cursor: pointer; white-space: nowrap; user-select: none; touch-action: none;
+    pointer-events: auto;
   }
   .allitem:hover { background: rgba(255,255,255,.1); color: var(--text); }
-  .allitem { user-select: none; touch-action: none; }
   .allitem .dot { margin-top: 0; }
   .allitem .nm { overflow: hidden; text-overflow: ellipsis; }
   .allitem.done { opacity: .55; }
   .allitem.done .nm { text-decoration: line-through; }
   .allmore {
-    height: 18px; padding: 0 7px; border-radius: 6px;
+    flex: none; height: 18px; padding: 0 7px; border-radius: 6px;
     border: 1px dashed rgba(255,255,255,.14); background: transparent;
     color: var(--faint); font-family: inherit; font-size: 10px; cursor: default;
   }
@@ -1060,11 +1045,6 @@
     <kbd>Esc</kbd>
   </div>
 
-  <div class="allstrip" id="allStrip">
-    <span class="alllabel" id="allDate"></span>
-    <div class="allitems" id="allItems"></div>
-  </div>
-
   <section class="timeline" id="timeline" data-track="sched">
     <div class="gutterbg"></div>
     <div class="trackbar">
@@ -1455,10 +1435,6 @@
   function snapMinute(minute) {
     return Math.round(minute / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
   }
-  /* 向上吸附：09:07 -> 09:15（留一点 epsilon，正好落在刻度上时不跳下一格） */
-  function snapMinuteUp(minute) {
-    return Math.ceil((minute - 1e-6) / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
-  }
   /* 真正可见的时间区：scroll 视口扣掉顶部 trackbar 覆盖和底部抽屉 */
   function visibleTimeRect() {
     const box = scroll.getBoundingClientRect();
@@ -1534,12 +1510,10 @@
 
   const items = { sched: [], due: [] };
 
-  /* ---------- 置顶全天任务区 ----------
-     不进 .scroll：始终固定在轨道切换栏上方，只显示「当前视口顶部那天」的全天任务 */
-  const allStrip = document.getElementById("allStrip");
-  const allItems = document.getElementById("allItems");
-  const allDate = document.getElementById("allDate");
-  let allStripSig = "";
+  /* ---------- 时间线内每日全天行（滚动吸顶） ----------
+     每个「有全天任务」的日期在 canvas 内该日 y 处画一条 28px 行；
+     z-index 高于 lane、低于 now 徽标。日期没有全天任务就不渲染。 */
+  let allDayRows = [];          // 按 y 升序：{ el, y, day, key, list }
 
   function dayStartOf(ts) {
     const d = new Date(ts);
@@ -1551,43 +1525,40 @@
     return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
   }
 
-  function overAllStrip(x, y) {
-    const r = allStrip.getBoundingClientRect();
-    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  /* 当前轨道按天分组的全天任务 */
+  function allDayByDay(key) {
+    const byDay = new Map();
+    tasks.forEach(t => {
+      if (!t[ALL_DAY_KEY[key]] || typeof t[key] !== "number") return;
+      const day = dayStartOf(base + t[key] * H);
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(t);
+    });
+    return byDay;
   }
 
-  function allDayInView() {
+  function renderAllDayRows() {
+    allDayRows.forEach(r => r.el.remove());
+    allDayRows = [];
     const key = document.getElementById("timeline").dataset.track;
-    const day = dayStartOf(yToMinute(visibleTimeRect().top) * 60000);
-    return {
-      key, day,
-      list: tasks.filter(t => t[ALL_DAY_KEY[key]] && typeof t[key] === "number"
-        && dayStartOf(base + t[key] * H) === day),
-    };
-  }
+    const byDay = allDayByDay(key);
+    [...byDay.keys()].sort((a, b) => a - b).forEach(day => {
+      const list = byDay.get(day);
+      const el = document.createElement("div");
+      el.className = "allday-row";
+      el.dataset.day = String(day);
+      el.style.top = yOf(day) + "px";
 
-  let allStripDay = null;
+      const label = document.createElement("span");
+      label.className = "adate";
+      const d = new Date(day);
+      label.textContent =
+        (d.getMonth() + 1) + "/" + d.getDate() + " " + WEEK[d.getDay()].replace("周", "");
 
-  function renderAllStrip() {
-    if (!allStrip) return;
-    const { key, day, list } = allDayInView();
-    /* 同一天、同轨道、同内容就不重建（滚动时每帧调用，必须便宜） */
-    const sig = key + "|" + day + "|" +
-      list.map(t => t.id + ":" + t.status + ":" + t.title).join("|");
-    if (sig === allStripSig) return;
-    allStripSig = sig;
+      const items = document.createElement("div");
+      items.className = "aitems";
+      el.append(label, items);
 
-    const d = new Date(day);
-    allDate.textContent =
-      (d.getMonth() + 1) + "/" + d.getDate() + " " + WEEK[d.getDay()].replace("周", "");
-    allItems.innerHTML = "";
-
-    if (!list.length) {
-      const empty = document.createElement("span");
-      empty.className = "allempty";
-      empty.textContent = "无全天";
-      allItems.appendChild(empty);
-    } else {
       list.forEach(t => {
         const item = document.createElement("button");
         item.type = "button";
@@ -1605,31 +1576,31 @@
           if (Date.now() - (item._dragEndedAt || 0) < 300) return;   // 刚拖过，不当点击
           openDetail(t, key, item);
         });
-        item.addEventListener("pointerdown", e => {
-          if (e.button !== 0) return;
-          e.stopPropagation();
-          startAllDayDrag(e, t, key, item);
-        });
         item.addEventListener("contextmenu", e => {
           e.preventDefault();
           e.stopPropagation();
           openCtx(e.clientX, e.clientY, t, t.status || "");
         });
-        allItems.appendChild(item);
+        item.addEventListener("pointerdown", e => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          startAllDayDrag(e, t, key, item);
+        });
+        items.appendChild(item);
       });
 
       const more = document.createElement("button");
       more.type = "button";
       more.className = "allmore";
       more.style.display = "none";
-      allItems.appendChild(more);
+      items.appendChild(more);
 
       /* 单行放不下：从末尾收起，用 +N 代替 */
-      const els = [...allItems.querySelectorAll(".allitem")];
-      const overflowing = () => allItems.scrollWidth > allItems.clientWidth + 1;
+      const els = [...items.querySelectorAll(".allitem")];
+      const overflowing = () => items.scrollWidth > items.clientWidth + 1;
       let hidden = 0;
       while (hidden < els.length) {
-        els.forEach(el => { el.style.display = ""; });
+        els.forEach(it => { it.style.display = ""; });
         if (hidden) {
           for (let i = 0; i < hidden; i++) els[els.length - 1 - i].style.display = "none";
           more.style.display = "";
@@ -1641,22 +1612,66 @@
         if (!overflowing()) break;
         hidden += 1;
       }
-      if (hidden >= els.length) {         // 极窄窗口：保底留一条，不整块消失
-        els.forEach((el, i) => { el.style.display = i === 0 ? "" : "none"; });
+      if (hidden >= els.length) {
+        els.forEach((it, i) => { it.style.display = i === 0 ? "" : "none"; });
         more.style.display = "none";
       }
-    }
 
-    /* 日界线切换：整体 120ms 淡入（只改透明度，不动高度） */
-    if (allStripDay !== null && allStripDay !== day) {
-      allStrip.classList.remove("fade");
-      void allStrip.offsetWidth;
-      allStrip.classList.add("fade");
-    }
-    allStripDay = day;
+      canvasInner.appendChild(el);
+      allDayRows.push({ el, y: yOf(day), day, key, list });
+    });
+    updatePinnedRows();
   }
 
-  /* 把全天 pill 拖进时间轴：松手处 = start（15min 吸附），固定时长 1 小时 */
+  /* 吸顶：pinnedY 是可见时间区顶部在 canvasInner 坐标系里的 y */
+  function updatePinnedRows() {
+    if (!allDayRows.length) return;
+    const box = scroll.getBoundingClientRect();
+    const view = visibleTimeRect();
+    const pinned = scroll.scrollTop + (view.top - box.top) * canvasYRatio() - padTop;
+
+    let active = -1;
+    for (let i = 0; i < allDayRows.length; i++) {
+      const r = allDayRows[i];
+      if (pinned + 0.5 < r.y) break;                 // 还没滚到这条
+      if (pinned < r.y + 24 * PX_PER_HOUR) active = i;   // 当前还在这一天的范围内
+    }
+
+    allDayRows.forEach((r, i) => {
+      r.el.classList.toggle("pinned", i === active);
+      r.el.style.transform = "";
+    });
+
+    if (active >= 0) {
+      const row = allDayRows[active];
+      let dy = pinned - row.y;
+      const next = allDayRows[active + 1];
+      if (next && next.y < pinned + 28) {
+        dy -= (pinned + 28 - next.y);                // 下一条顶上来，把当前这条推出去
+      }
+      row.el.style.transform = "translateY(" + dy + "px)";
+    }
+  }
+
+  function rowAt(x, y) {
+    for (const r of allDayRows) {
+      const b = r.el.getBoundingClientRect();
+      if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return r;
+    }
+    return null;
+  }
+
+  let allDayRaf = 0;
+  function scheduleAllDayRows() {
+    if (allDayRaf) return;
+    allDayRaf = requestAnimationFrame(() => {
+      allDayRaf = 0;
+      updatePinnedRows();
+    });
+  }
+  scroll.addEventListener("scroll", scheduleAllDayRows, { passive: true });
+
+  /* 把全天 pill 拖进时间轴：松手处 = start（就近 15min 吸附），固定时长 1 小时 */
   function startAllDayDrag(e, t, key, el) {
     const startX = e.clientX, startY = e.clientY;
     let pointerX = startX, pointerY = startY;
@@ -1691,7 +1706,7 @@
 
     const render = () => {
       ensureVisuals();
-      const startMin = snapMinuteUp(yToMinute(pointerY));
+      const startMin = snapMinute(yToMinute(pointerY));
       ghost.style.left = Math.max(4, pointerX + 12) + "px";
       ghost.style.top = Math.max(4, pointerY + 12) + "px";
       if (inTimeline(pointerX, pointerY)) {
@@ -1749,7 +1764,7 @@
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       if (dragging) render();
       const dropped = dragging && inTimeline(pointerX, pointerY);
-      const startMin = dropped ? snapMinuteUp(yToMinute(pointerY)) : null;
+      const startMin = dropped ? snapMinute(yToMinute(pointerY)) : null;
       el.style.opacity = "";
       cleanup();
       if (!dragging) return;              // 位移不足：交给 click 打开详情
@@ -1769,7 +1784,7 @@
           if (k in ui) t[k] = ui[k];
           else delete t[k];
         });
-        refreshChips(t);                  // lane 补卡 + strip 重新算（pill 消失）
+        refreshChips(t);                  // lane 补卡 + 全天行重算
       } else {
         toast("转为定时失败：" + ((res && res.error) || "未知错误"));
       }
@@ -1780,15 +1795,6 @@
     window.addEventListener("pointercancel", onCancel);
   }
 
-  let allStripRaf = 0;
-  function scheduleAllStrip() {
-    if (allStripRaf) return;
-    allStripRaf = requestAnimationFrame(() => {
-      allStripRaf = 0;
-      renderAllStrip();
-    });
-  }
-  scroll.addEventListener("scroll", scheduleAllStrip, { passive: true });
 
   /* 时间行文案：有时间段就显示 15:00–16:30 */
   function chipTimeText(t, key) {
@@ -2128,7 +2134,7 @@
       : 0;
     let pointerY = e.clientY;
     let pointerX = e.clientX;
-    let overStrip = false;
+    let dropRow = null;
     let dragging = false;
     let targetTs = startTs;
     let stopAuto = null;
@@ -2151,7 +2157,7 @@
 
     /* 每帧都按「指针位置」重算，zoom / 滚动都在 yToMinute 里处理 */
     const updatePreview = () => {
-      if (overStrip) {
+      if (dropRow) {
         dragtip.textContent = "放开转为全天";
         dragtip.classList.add("on");
         return;
@@ -2209,8 +2215,8 @@
       document.body.classList.remove("drag-lock");
       dragtip.classList.remove("on");
       el.classList.remove("dragging");
-      overStrip = false;
-      allStrip.classList.remove("dropping");
+      if (dropRow) dropRow.el.classList.remove("drop");
+      dropRow = null;
     };
 
     /* 拖到窗口外/切走焦点，收不到 pointerup：取消并归位，别卡在拖拽态 */
@@ -2230,11 +2236,12 @@
         el.classList.add("dragging");
         stopAuto = startAutoScroll(() => pointerY, () => schedule(pointerY));
       }
-      const hit = overAllStrip(pointerX, pointerY);
-      if (hit !== overStrip) {
-        overStrip = hit;
-        allStrip.classList.toggle("dropping", hit);
-        if (hit && stopAuto) {          // 悬在 strip 上时别再自动滚，否则日期一直变
+      const hit = rowAt(pointerX, pointerY);
+      if (hit !== dropRow) {
+        if (dropRow) dropRow.el.classList.remove("drop");
+        dropRow = hit;
+        if (hit) hit.el.classList.add("drop");
+        if (hit && stopAuto) {          // 悬在全天行上时别再自动滚
           stopAuto(); stopAuto = null;
         } else if (!hit && dragging && !stopAuto) {
           stopAuto = startAutoScroll(() => pointerY, () => schedule(pointerY));
@@ -2247,7 +2254,7 @@
     const onUp = async () => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       if (dragging) updatePreview();
-      const dropAllDay = overStrip;   // detach 会清 overStrip，先记住
+      const dropAllDay = dropRow;     // detach 会清 dropRow，先记住
       detach();
       if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
       suppressClickOnce();
@@ -2260,8 +2267,8 @@
       }
 
       if (dropAllDay) {
-        /* 定时 -> 全天：日期取 strip 当前显示的那一天 */
-        const day = isoDateOf(allStripDay || dayStartOf(Date.now()));
+        /* 定时 -> 全天：日期取落点那一条全天行的日期 */
+        const day = isoDateOf(dropAllDay.day);
         el.style.opacity = ".7";
         const res = await api.set_all_day(t.id, TRACK_PROP[key], day);
         el.style.opacity = "";
@@ -2272,7 +2279,7 @@
             if (k in ui) t[k] = ui[k];
             else delete t[k];
           });
-          refreshChips(t);                // 撤掉 lane 卡，strip 补一条
+          refreshChips(t);                // 撤掉 lane 卡，全天行补一条
         } else {
           restore();
           toast("转为全天失败：" + ((res && res.error) || "未知错误"));
@@ -2509,7 +2516,7 @@
   });
   layoutLane("sched");
   layoutLane("due");
-  renderAllStrip();
+  renderAllDayRows();
 
   const drawer = document.getElementById("drawer");
   const drawerBody = document.getElementById("drawerBody");
@@ -2590,7 +2597,7 @@
     layoutLane("sched");
     layoutLane("due");
     updateCounts();
-    renderAllStrip();
+    renderAllDayRows();
     renderSummary();
     renderDrawer();
     const bar = document.getElementById("searchBar");
@@ -2760,12 +2767,17 @@
       });
       if (!fast) layoutLane(key);   // 重算避让与 tick
     });
+    allDayRows.forEach(r => {       // 全天行跟着 px/h 重新定位
+      r.y = yOf(r.day);
+      r.el.style.top = r.y + "px";
+    });
     const rect = scroll.getBoundingClientRect();
     const fromTop = (typeof anchorY === "number")
       ? (anchorY - rect.top) * canvasYRatio()
       : (visibleTimeRect().center - rect.top) * canvasYRatio();
     scroll.scrollTop = Math.max(
       0, padTop + ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
+    updatePinnedRows();
     updateScaleLabel();
     return PX_PER_HOUR;
   }
@@ -3192,7 +3204,7 @@
     document.querySelectorAll(".track").forEach(b =>
       b.classList.toggle("on", b.dataset.track === name));
     updateEmptyHint();
-    renderAllStrip();
+    renderAllDayRows();
   }
   document.querySelectorAll(".track").forEach(b =>
     b.addEventListener("click", () => setTrack(b.dataset.track)));
@@ -4066,7 +4078,7 @@
       }
       layoutLane(key);
     });
-    renderAllStrip();
+    renderAllDayRows();
   }
 
   function applyDetailResult(uiTask) {
@@ -4195,7 +4207,7 @@
       layoutLane("sched");
       layoutLane("due");
       updateCounts();
-      renderAllStrip();
+      renderAllDayRows();
     },
     remove(id) {
       if (detailTask && detailTask.id === id) closeDetail();
@@ -4205,7 +4217,7 @@
       layoutLane("sched");
       layoutLane("due");
       updateCounts();
-      renderAllStrip();
+      renderAllDayRows();
     },
     setStatus(id, status) {
       const task = tasks.find(t => t.id === id);
@@ -4216,7 +4228,7 @@
         if (dot) dot.className = "dot " + status;
         el.classList.toggle("done", status === "done");
       });
-      renderAllStrip();
+      renderAllDayRows();
     },
     setStatus(info) { applySyncStatus(info); return true; },
 

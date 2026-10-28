@@ -37,8 +37,8 @@ E:/software/miniforge/python.exe d:/project/notion_plugin/app/main.py
 - [ ] **B4 关闭与跳转**
   点右上角 `×` → 面板收起；
   双击任意任务卡 → 默认浏览器打开对应 Notion 页面。
-- [ ] **B5 置顶全天区**
-  顶部全天区显示当前视口顶部那天的全天任务；点条目开详情，右键菜单同卡片。
+- [ ] **B5 每日全天行**
+  时间线内每个有全天任务的日期有一条 28px 全天行；点条目开详情，右键菜单同卡片。
 - [ ] **B6 拖动窗口**
   按住顶栏空白处（日期文字周围）拖动 → 整个窗口跟着走；松手停在原处。
   点齿轮/刷新/×/输入框**不会**拖动窗口。
@@ -61,9 +61,9 @@ E:/software/miniforge/python.exe d:/project/notion_plugin/app/main.py
 > cd D:\project\notion_plugin; E:\software\miniforge\python.exe app\main.py --keep-open
 > ```
 
-- [ ] **D1 全天区跨天**
-  造三天数据（day1 两条全天、day2 一条、day3 无）→ 滚动跨到 day2 时整条换成一条，
-  到 day3 时整条收起且不占高度；轨道里不出现全天卡片。
+- [ ] **D1 全天行吸顶**
+  造三天数据（day1 两条全天、day2 一条、day3 无）→ day1/day2 各有一条行、day3 无；
+  滚过日界线时旧行被顶出、新行接替；轨道里不出现全天卡片。
 - [ ] **D2 右键换状态**
   右键任意卡片 → 切换状态 → 圆点变色（未开始 → 进行中 → 已完成），Notion 里同步。
 - [ ] **D3 右键删除**
