@@ -186,32 +186,6 @@
   .iconbtn.spinning svg { animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* ---------------- 快速新增 ---------------- */
-  .quickadd {
-    flex: none;
-    margin: 0 14px 8px;
-    height: 40px;
-    display: flex; align-items: center; gap: 8px;
-    padding: 0 11px;
-    border-radius: 11px;
-    background: rgba(255,255,255,.05);
-    border: 1px solid rgba(255,255,255,.075);
-    transition: border-color .18s, background .18s;
-  }
-  .quickadd:focus-within { border-color: rgba(124,140,255,.5); background: rgba(124,140,255,.08); }
-  .quickadd .plus { color: var(--faint); font-size: 15px; line-height: 1; }
-  .quickadd input {
-    flex: 1; min-width: 0; background: transparent; border: 0; outline: 0;
-    color: var(--text); font-size: 12.5px; font-family: inherit; letter-spacing: .2px;
-  }
-  .quickadd input::placeholder { color: var(--faint); }
-  .quickadd kbd {
-    font-family: inherit; font-size: 10px; color: var(--faint);
-    border: 1px solid rgba(255,255,255,.09);
-    background: rgba(255,255,255,.045);
-    padding: 2px 5px; border-radius: 5px;
-  }
-
   /* ---------------- 空白新建 ---------------- */
   .cband {
     position: absolute; left: 7px; right: 6px; z-index: 11;
@@ -255,6 +229,46 @@
     padding: 2px 5px; border-radius: 5px;
   }
   .chip.hide, .ditem.hide { display: none; }
+
+  /* ---------------- 置顶全天任务 ---------------- */
+  .allstrip {
+    flex: none;
+    display: none;
+    margin: 0 14px 8px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.07);
+    gap: 8px;
+  }
+  .allstrip.on { display: flex; }
+  .allstrip .alllabel {
+    flex: none; margin-top: 3px;
+    font-size: 9.5px; color: var(--faint); letter-spacing: .08em;
+  }
+  .allitems {
+    flex: 1; min-width: 0;
+    display: flex; flex-wrap: wrap; gap: 4px 6px;
+    max-height: 40px; overflow: hidden;       /* 两行 18px + 4px 行距 */
+  }
+  .allitem {
+    max-width: 100%; height: 18px; padding: 0 7px;
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid rgba(255,255,255,.07); border-radius: 6px;
+    background: rgba(255,255,255,.055);
+    color: var(--dim); font-family: inherit; font-size: 10.5px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .allitem:hover { background: rgba(255,255,255,.1); color: var(--text); }
+  .allitem .dot { margin-top: 0; }
+  .allitem .nm { overflow: hidden; text-overflow: ellipsis; }
+  .allitem.done { opacity: .55; }
+  .allitem.done .nm { text-decoration: line-through; }
+  .allmore {
+    height: 18px; padding: 0 7px; border-radius: 6px;
+    border: 1px dashed rgba(255,255,255,.14); background: transparent;
+    color: var(--faint); font-family: inherit; font-size: 10px; cursor: default;
+  }
 
   /* ---------------- 时间线 ---------------- */
   .timeline { position: relative; flex: 1; min-height: 0; overflow: hidden; }
@@ -1000,16 +1014,15 @@
     </div>
   </header>
 
-  <div class="quickadd">
-    <span class="plus">＋</span>
-    <input id="quickInput" placeholder="明天 15:00 交作业" autocomplete="off" spellcheck="false">
-    <kbd>↵</kbd>
-  </div>
-
   <div class="search" id="searchBar">
     <input id="searchInput" placeholder="搜索标题…" autocomplete="off" spellcheck="false">
     <span class="cnt" id="searchCount"></span>
     <kbd>Esc</kbd>
+  </div>
+
+  <div class="allstrip" id="allStrip">
+    <span class="alllabel">全天</span>
+    <div class="allitems" id="allItems"></div>
   </div>
 
   <section class="timeline" id="timeline" data-track="sched">
@@ -1024,7 +1037,7 @@
       <div class="canvas" id="canvas"></div>
     </div>
 
-    <div class="empty-hint" id="emptyHint">双击空白新建</div>
+    <div class="empty-hint" id="emptyHint">点空白新建</div>
     <div class="nowline" id="nowline"></div>
     <div class="nowbadge">
       <span class="glow"></span>
@@ -1476,6 +1489,102 @@
   canvasInner.appendChild(lanes.due);
 
   const items = { sched: [], due: [] };
+
+  /* ---------- 置顶全天任务区 ----------
+     不进 .scroll：始终固定在轨道切换栏上方，只显示「当前视口顶部那天」的全天任务 */
+  const allStrip = document.getElementById("allStrip");
+  const allItems = document.getElementById("allItems");
+  let allStripSig = "";
+
+  function dayStartOf(ts) {
+    const d = new Date(ts);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
+
+  function allDayInView() {
+    const key = document.getElementById("timeline").dataset.track;
+    const day = dayStartOf(yToMinute(visibleTimeRect().top) * 60000);
+    return {
+      key, day,
+      list: tasks.filter(t => t[ALL_DAY_KEY[key]] && typeof t[key] === "number"
+        && dayStartOf(base + t[key] * H) === day),
+    };
+  }
+
+  function renderAllStrip() {
+    if (!allStrip) return;
+    const { key, day, list } = allDayInView();
+    /* 同一天、同轨道、同内容就不重建（滚动时每帧调用，必须便宜） */
+    const sig = key + "|" + day + "|" +
+      list.map(t => t.id + ":" + t.status + ":" + t.title).join("|");
+    if (sig === allStripSig) return;
+    allStripSig = sig;
+    allItems.innerHTML = "";
+    if (!list.length) { allStrip.classList.remove("on"); return; }
+    allStrip.classList.add("on");
+
+    list.forEach(t => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "allitem" + (t.status === "done" ? " done" : "");
+      item.dataset.id = t.id;
+      item.title = t.title || "";
+      const dot = document.createElement("i");
+      dot.className = "dot " + (t.status || "");
+      const name = document.createElement("span");
+      name.className = "nm";
+      name.textContent = t.title || "(无标题)";
+      item.append(dot, name);
+      item.addEventListener("click", e => {
+        e.stopPropagation();
+        openDetail(t, key, item);
+      });
+      item.addEventListener("contextmenu", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        openCtx(e.clientX, e.clientY, t, t.status || "");
+      });
+      allItems.appendChild(item);
+    });
+
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "allmore";
+    more.style.display = "none";
+    allItems.appendChild(more);
+
+    /* 最多两行：超出的从末尾收起，用 +N 代替 */
+    const els = [...allItems.querySelectorAll(".allitem")];
+    const overflowing = () => allItems.scrollHeight > allItems.clientHeight + 1;
+    let hidden = 0;
+    while (hidden < els.length) {
+      els.forEach(el => { el.style.display = ""; });
+      if (hidden) {
+        for (let i = 0; i < hidden; i++) els[els.length - 1 - i].style.display = "none";
+        more.style.display = "";
+        more.textContent = "+" + hidden;
+        more.title = "另有 " + hidden + " 项全天任务";
+      } else {
+        more.style.display = "none";
+      }
+      if (!overflowing()) break;
+      hidden += 1;
+    }
+    if (hidden >= els.length) {         // 极窄窗口：保底留一条，不整块消失
+      els.forEach((el, i) => { el.style.display = i === 0 ? "" : "none"; });
+      more.style.display = "none";
+    }
+  }
+
+  let allStripRaf = 0;
+  function scheduleAllStrip() {
+    if (allStripRaf) return;
+    allStripRaf = requestAnimationFrame(() => {
+      allStripRaf = 0;
+      renderAllStrip();
+    });
+  }
+  scroll.addEventListener("scroll", scheduleAllStrip, { passive: true });
 
   /* 时间行文案：有时间段就显示 15:00–16:30 */
   function chipTimeText(t, key) {
@@ -1991,6 +2100,7 @@
 
   function mountChip(t, key) {
     if (typeof t[key] !== "number") return null;
+    if (t[ALL_DAY_KEY[key]]) return null;   // 全天任务只进置顶区，不进轨道
     const ts = base + t[key] * H;
     const late = key === "due" && ts < nowTs && t.status !== "done";
 
@@ -2150,6 +2260,7 @@
   });
   layoutLane("sched");
   layoutLane("due");
+  renderAllStrip();
 
   const drawer = document.getElementById("drawer");
   const drawerBody = document.getElementById("drawerBody");
@@ -2230,6 +2341,7 @@
     layoutLane("sched");
     layoutLane("due");
     updateCounts();
+    renderAllStrip();
     renderSummary();
     renderDrawer();
     const bar = document.getElementById("searchBar");
@@ -2831,6 +2943,7 @@
     document.querySelectorAll(".track").forEach(b =>
       b.classList.toggle("on", b.dataset.track === name));
     updateEmptyHint();
+    renderAllStrip();
   }
   document.querySelectorAll(".track").forEach(b =>
     b.addEventListener("click", () => setTrack(b.dataset.track)));
@@ -3251,9 +3364,9 @@
   /* ---------- 写入：新增 / 改状态 / 删除 ---------- */
   function updateCounts() {
     document.getElementById("cntSched").textContent =
-      lanes.sched.querySelectorAll(".chip").length;
+      tasks.filter(t => typeof t.sched === "number").length;
     document.getElementById("cntDue").textContent =
-      lanes.due.querySelectorAll(".chip").length;
+      tasks.filter(t => typeof t.due === "number").length;
   }
 
   /* ---------- 详情弹窗 ---------- */
@@ -3703,6 +3816,7 @@
       }
       layoutLane(key);
     });
+    renderAllStrip();
   }
 
   function applyDetailResult(uiTask) {
@@ -3831,21 +3945,28 @@
       layoutLane("sched");
       layoutLane("due");
       updateCounts();
+      renderAllStrip();
     },
     remove(id) {
       if (detailTask && detailTask.id === id) closeDetail();
+      const idx = tasks.findIndex(t => t.id === id);
+      if (idx >= 0) tasks.splice(idx, 1);
       document.querySelectorAll('.chip[data-id="' + id + '"]').forEach(el => el.remove());
       layoutLane("sched");
       layoutLane("due");
       updateCounts();
+      renderAllStrip();
     },
     setStatus(id, status) {
+      const task = tasks.find(t => t.id === id);
+      if (task) task.status = status;
       document.querySelectorAll('.chip[data-id="' + id + '"]').forEach(el => {
         el.dataset.status = status;
         const dot = el.querySelector(".dot");
         if (dot) dot.className = "dot " + status;
         el.classList.toggle("done", status === "done");
       });
+      renderAllStrip();
     },
     setStatus(info) { applySyncStatus(info); return true; },
 
@@ -3937,58 +4058,6 @@
     }
   });
 
-  /* ---------- 快速新增 ---------- */
-  const input = document.getElementById("quickInput");
-
-  /* 当前轨道对应的日期属性 */
-  function currentTrackProp() {
-    return timelineEl.dataset.track === "sched" ? "安排日期" : "截止日期";
-  }
-
-  /* 该时刻 → 快速新增的预填文案（15 分钟取整 + 相对日） */
-  function quickAddText(ts) {
-    const d = new Date(ts);
-    d.setMinutes(Math.round(d.getMinutes() / 15) * 15, 0, 0);
-    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const diff = Math.round((dayStart - base) / DAY);
-    const word = diff === 0 ? "今天" : diff === 1 ? "明天" : diff === 2 ? "后天"
-      : diff === -1 ? "昨天"
-      : (d.getMonth() + 1) + "月" + d.getDate() + "日";
-    return word + " " + hhmm(d.getTime()) + " ";
-  }
-
-  /* 双击时间轴空白：把该位置的时间填进快速新增并聚焦 */
-  scroll.addEventListener("dblclick", e => {
-    if (e.target.closest(".chip, .dot, button, input")) return;   // 卡片/控件不接管
-    input.value = quickAddText(snapMs(tsAtPoint(e.clientY), false));
-    input.focus();
-    const len = input.value.length;
-    input.setSelectionRange(len, len);
-  });
-
-  input.addEventListener("keydown", async e => {
-    if (e.key !== "Enter" || !input.value.trim()) return;
-    const text = input.value.trim();
-
-    if (!(window.pywebview && window.pywebview.api)) {
-      input.value = "";
-      input.placeholder = "浏览器预览不会写入";
-      setTimeout(() => { input.placeholder = "明天 15:00 交作业"; }, 1800);
-      return;
-    }
-
-    input.value = "";
-    input.placeholder = "正在写入…";
-    const res = await window.pywebview.api.create_from_text(text, currentTrackProp());
-    if (res && res.ok && res.task) {
-      window.__hud.add(res.task);
-      input.placeholder = "已加入：" + res.task.title;
-    } else {
-      input.value = text;
-      input.placeholder = "写入失败：" + ((res && res.error) || "未知错误");
-    }
-    setTimeout(() => { input.placeholder = "明天 15:00 交作业"; }, 2400);
-  });
 })();
 </script>
 </body>
