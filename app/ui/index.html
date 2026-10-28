@@ -232,6 +232,7 @@
 
   /* ---------------- 置顶全天任务 ---------------- */
   .allstrip {
+    position: relative;
     flex: none;
     display: flex; align-items: center;
     margin: 0 14px 8px;
@@ -243,6 +244,19 @@
     gap: 8px;
   }
   .allstrip.fade { animation: allfade .12s ease; }
+  .allstrip.dropping {
+    border-color: rgba(124,140,255,.55);
+    background: rgba(124,140,255,.12);
+  }
+  .allstrip.dropping::after {
+    content: "放开转为全天";
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    padding: 2px 8px; border-radius: 5px;
+    background: rgba(124,140,255,.24);
+    border: 1px solid rgba(124,140,255,.45);
+    color: #DDE1FF; font-size: 9.5px; white-space: nowrap;
+    pointer-events: none;
+  }
   @keyframes allfade { from { opacity: 0; } to { opacity: 1; } }
   .allstrip .alllabel {
     flex: none;
@@ -1532,6 +1546,16 @@
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   }
 
+  function isoDateOf(ms) {
+    const d = new Date(ms);
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  }
+
+  function overAllStrip(x, y) {
+    const r = allStrip.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
   function allDayInView() {
     const key = document.getElementById("timeline").dataset.track;
     const day = dayStartOf(yToMinute(visibleTimeRect().top) * 60000);
@@ -2097,11 +2121,14 @@
     const origTop = parseFloat(el.style.top) || item.y;
     const topOffset = origTop - yOf(startTs);   // 被避让顶开的那点偏移，拖动时保留
     const startClientY = e.clientY;
+    const startClientX = e.clientX;
     const allDayDur = allDay
       ? Math.max(30, Math.ceil(((el._baseH || el.offsetHeight) / PX_PER_MIN) / DRAG_SNAP_MIN)
         * DRAG_SNAP_MIN)
       : 0;
     let pointerY = e.clientY;
+    let pointerX = e.clientX;
+    let overStrip = false;
     let dragging = false;
     let targetTs = startTs;
     let stopAuto = null;
@@ -2124,6 +2151,11 @@
 
     /* 每帧都按「指针位置」重算，zoom / 滚动都在 yToMinute 里处理 */
     const updatePreview = () => {
+      if (overStrip) {
+        dragtip.textContent = "放开转为全天";
+        dragtip.classList.add("on");
+        return;
+      }
       if (allDay) {
         /* 全天卡拖出时间：start 跟着指针，时长按卡片高度折算 */
         targetTs = snapMinute(yToMinute(pointerY)) * 60000;
@@ -2177,6 +2209,8 @@
       document.body.classList.remove("drag-lock");
       dragtip.classList.remove("on");
       el.classList.remove("dragging");
+      overStrip = false;
+      allStrip.classList.remove("dropping");
     };
 
     /* 拖到窗口外/切走焦点，收不到 pointerup：取消并归位，别卡在拖拽态 */
@@ -2188,11 +2222,23 @@
     const onMove = ev => {
       if (e.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
       pointerY = ev.clientY;
+      pointerX = ev.clientX;
       if (!dragging) {
-        if (Math.abs(ev.clientY - startClientY) < DRAG_CLICK_PX) return;
+        if (Math.abs(ev.clientY - startClientY) < DRAG_CLICK_PX &&
+            Math.abs(ev.clientX - startClientX) < DRAG_CLICK_PX) return;
         dragging = true;
         el.classList.add("dragging");
         stopAuto = startAutoScroll(() => pointerY, () => schedule(pointerY));
+      }
+      const hit = overAllStrip(pointerX, pointerY);
+      if (hit !== overStrip) {
+        overStrip = hit;
+        allStrip.classList.toggle("dropping", hit);
+        if (hit && stopAuto) {          // 悬在 strip 上时别再自动滚，否则日期一直变
+          stopAuto(); stopAuto = null;
+        } else if (!hit && dragging && !stopAuto) {
+          stopAuto = startAutoScroll(() => pointerY, () => schedule(pointerY));
+        }
       }
       schedule(pointerY);
       placeTip(ev);
@@ -2201,6 +2247,7 @@
     const onUp = async () => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       if (dragging) updatePreview();
+      const dropAllDay = overStrip;   // detach 会清 overStrip，先记住
       detach();
       if (!dragging) return;          // 位移不足 4px：当作点击，交给 click 处理
       suppressClickOnce();
@@ -2211,6 +2258,28 @@
         restore();
         return;
       }
+
+      if (dropAllDay) {
+        /* 定时 -> 全天：日期取 strip 当前显示的那一天 */
+        const day = isoDateOf(allStripDay || dayStartOf(Date.now()));
+        el.style.opacity = ".7";
+        const res = await api.set_all_day(t.id, TRACK_PROP[key], day);
+        el.style.opacity = "";
+        if (res && res.ok && res.task) {
+          const ui = res.task;
+          ["title", "status", "tag", "dir", "subject", "sched", "due",
+           "allDaySched", "allDayDue", "endSched", "endDue"].forEach(k => {
+            if (k in ui) t[k] = ui[k];
+            else delete t[k];
+          });
+          refreshChips(t);                // 撤掉 lane 卡，strip 补一条
+        } else {
+          restore();
+          toast("转为全天失败：" + ((res && res.error) || "未知错误"));
+        }
+        return;
+      }
+
       el.style.opacity = ".7";
 
       if (allDay) {
@@ -3970,7 +4039,8 @@
   function refreshChips(t) {
     ["sched", "due"].forEach(key => {
       const hasValue = typeof t[key] === "number";
-      if (!hasValue) {
+      const isAllDay = hasValue && !!t[ALL_DAY_KEY[key]];
+      if (!hasValue || isAllDay) {          // 无日期 / 转全天：车道里的卡要撤掉
         items[key].forEach(item => { if (item.t.id === t.id) item.el.remove(); });
         items[key] = items[key].filter(item => item.t.id !== t.id);
       } else {

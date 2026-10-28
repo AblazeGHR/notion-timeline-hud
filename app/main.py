@@ -1284,6 +1284,29 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
+    def set_all_day(self, task_id: str, prop: str, date: str) -> dict:
+        """把某一侧的日期清成「只有日期」：不写 start_time / end_time / end。"""
+        if prop not in (TRACK_SCHED, TRACK_DUE):
+            return {"ok": False, "error": f"不支持的日期属性：{prop}"}
+        if not isinstance(date, str):
+            return {"ok": False, "error": "缺少日期"}
+        day = date.strip()
+        try:
+            datetime.strptime(day, "%Y-%m-%d")
+        except ValueError:
+            return {"ok": False, "error": f"日期格式应为 YYYY-MM-DD：{date}"}
+
+        value = DateValue(start=day)      # 无时间、无 end，其余字段保持 None
+        try:
+            with NotionClient() as client:
+                updated = client.update_task(task_id, dates={prop: value})
+            ui = to_ui([updated])
+            if not ui["tasks"]:
+                return {"ok": False, "error": "改为全天失败：任务没有日期"}
+            return {"ok": True, "task": ui["tasks"][0], "date": value.to_dict()}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
     def update_block_text(self, block_id: str, text: str) -> dict:
         """改一个文本块的文字（rich_text 会合并成单 run）。"""
         try:
