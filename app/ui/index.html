@@ -233,26 +233,33 @@
   /* ---------------- 置顶全天任务 ---------------- */
   .allstrip {
     flex: none;
-    display: none;
+    display: flex; align-items: center;
     margin: 0 14px 8px;
-    padding: 6px 10px;
-    border-radius: 10px;
+    height: 28px;                             /* 固定一行：跨天不改变高度 */
+    padding: 0 10px;
+    border-radius: 9px;
     background: rgba(255,255,255,.045);
     border: 1px solid rgba(255,255,255,.07);
     gap: 8px;
   }
-  .allstrip.on { display: flex; }
+  .allstrip.fade { animation: allfade .12s ease; }
+  @keyframes allfade { from { opacity: 0; } to { opacity: 1; } }
   .allstrip .alllabel {
-    flex: none; margin-top: 3px;
-    font-size: 9.5px; color: var(--faint); letter-spacing: .08em;
+    flex: none;
+    font-size: 9.5px; color: var(--faint); letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
   }
   .allitems {
     flex: 1; min-width: 0;
-    display: flex; flex-wrap: wrap; gap: 4px 6px;
-    max-height: 40px; overflow: hidden;       /* 两行 18px + 4px 行距 */
+    display: flex; align-items: center; gap: 6px;
+    overflow: hidden;
+  }
+  .allempty {
+    flex: 1; text-align: right;
+    font-size: 9.5px; color: var(--faint); opacity: .55;
   }
   .allitem {
-    max-width: 100%; height: 18px; padding: 0 7px;
+    flex: none; max-width: 180px; height: 18px; padding: 0 7px;
     display: inline-flex; align-items: center; gap: 5px;
     border: 1px solid rgba(255,255,255,.07); border-radius: 6px;
     background: rgba(255,255,255,.055);
@@ -1021,7 +1028,7 @@
   </div>
 
   <div class="allstrip" id="allStrip">
-    <span class="alllabel">全天</span>
+    <span class="alllabel" id="allDate"></span>
     <div class="allitems" id="allItems"></div>
   </div>
 
@@ -1494,6 +1501,7 @@
      不进 .scroll：始终固定在轨道切换栏上方，只显示「当前视口顶部那天」的全天任务 */
   const allStrip = document.getElementById("allStrip");
   const allItems = document.getElementById("allItems");
+  const allDate = document.getElementById("allDate");
   let allStripSig = "";
 
   function dayStartOf(ts) {
@@ -1511,6 +1519,8 @@
     };
   }
 
+  let allStripDay = null;
+
   function renderAllStrip() {
     if (!allStrip) return;
     const { key, day, list } = allDayInView();
@@ -1519,61 +1529,78 @@
       list.map(t => t.id + ":" + t.status + ":" + t.title).join("|");
     if (sig === allStripSig) return;
     allStripSig = sig;
+
+    const d = new Date(day);
+    allDate.textContent =
+      (d.getMonth() + 1) + "/" + d.getDate() + " " + WEEK[d.getDay()].replace("周", "");
     allItems.innerHTML = "";
-    if (!list.length) { allStrip.classList.remove("on"); return; }
-    allStrip.classList.add("on");
 
-    list.forEach(t => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "allitem" + (t.status === "done" ? " done" : "");
-      item.dataset.id = t.id;
-      item.title = t.title || "";
-      const dot = document.createElement("i");
-      dot.className = "dot " + (t.status || "");
-      const name = document.createElement("span");
-      name.className = "nm";
-      name.textContent = t.title || "(无标题)";
-      item.append(dot, name);
-      item.addEventListener("click", e => {
-        e.stopPropagation();
-        openDetail(t, key, item);
+    if (!list.length) {
+      const empty = document.createElement("span");
+      empty.className = "allempty";
+      empty.textContent = "无全天";
+      allItems.appendChild(empty);
+    } else {
+      list.forEach(t => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "allitem" + (t.status === "done" ? " done" : "");
+        item.dataset.id = t.id;
+        item.title = t.title || "";
+        const dot = document.createElement("i");
+        dot.className = "dot " + (t.status || "");
+        const name = document.createElement("span");
+        name.className = "nm";
+        name.textContent = t.title || "(无标题)";
+        item.append(dot, name);
+        item.addEventListener("click", e => {
+          e.stopPropagation();
+          openDetail(t, key, item);
+        });
+        item.addEventListener("contextmenu", e => {
+          e.preventDefault();
+          e.stopPropagation();
+          openCtx(e.clientX, e.clientY, t, t.status || "");
+        });
+        allItems.appendChild(item);
       });
-      item.addEventListener("contextmenu", e => {
-        e.preventDefault();
-        e.stopPropagation();
-        openCtx(e.clientX, e.clientY, t, t.status || "");
-      });
-      allItems.appendChild(item);
-    });
 
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "allmore";
-    more.style.display = "none";
-    allItems.appendChild(more);
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "allmore";
+      more.style.display = "none";
+      allItems.appendChild(more);
 
-    /* 最多两行：超出的从末尾收起，用 +N 代替 */
-    const els = [...allItems.querySelectorAll(".allitem")];
-    const overflowing = () => allItems.scrollHeight > allItems.clientHeight + 1;
-    let hidden = 0;
-    while (hidden < els.length) {
-      els.forEach(el => { el.style.display = ""; });
-      if (hidden) {
-        for (let i = 0; i < hidden; i++) els[els.length - 1 - i].style.display = "none";
-        more.style.display = "";
-        more.textContent = "+" + hidden;
-        more.title = "另有 " + hidden + " 项全天任务";
-      } else {
+      /* 单行放不下：从末尾收起，用 +N 代替 */
+      const els = [...allItems.querySelectorAll(".allitem")];
+      const overflowing = () => allItems.scrollWidth > allItems.clientWidth + 1;
+      let hidden = 0;
+      while (hidden < els.length) {
+        els.forEach(el => { el.style.display = ""; });
+        if (hidden) {
+          for (let i = 0; i < hidden; i++) els[els.length - 1 - i].style.display = "none";
+          more.style.display = "";
+          more.textContent = "+" + hidden;
+          more.title = "另有 " + hidden + " 项全天任务";
+        } else {
+          more.style.display = "none";
+        }
+        if (!overflowing()) break;
+        hidden += 1;
+      }
+      if (hidden >= els.length) {         // 极窄窗口：保底留一条，不整块消失
+        els.forEach((el, i) => { el.style.display = i === 0 ? "" : "none"; });
         more.style.display = "none";
       }
-      if (!overflowing()) break;
-      hidden += 1;
     }
-    if (hidden >= els.length) {         // 极窄窗口：保底留一条，不整块消失
-      els.forEach((el, i) => { el.style.display = i === 0 ? "" : "none"; });
-      more.style.display = "none";
+
+    /* 日界线切换：整体 120ms 淡入（只改透明度，不动高度） */
+    if (allStripDay !== null && allStripDay !== day) {
+      allStrip.classList.remove("fade");
+      void allStrip.offsetWidth;
+      allStrip.classList.add("fade");
     }
+    allStripDay = day;
   }
 
   let allStripRaf = 0;
