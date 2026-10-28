@@ -238,7 +238,7 @@
     background: rgba(16,17,23,.82);
     border: 1px solid rgba(255,255,255,.055);
     z-index: 5;                              /* 高于 lane(1)，低于 nowbadge(30) */
-    pointer-events: none;                    /* 空白处不挡轨道操作 */
+    pointer-events: auto;                    /* 间隙内本就没有时间内容，挡住误建卡 */
   }
   .allday-row.pinned {
     background: rgba(20,21,29,.985);
@@ -505,13 +505,13 @@
   .hour-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
   .hourline {
     position: absolute; left: var(--gutter); right: 6px; height: 1px;
-    top: calc(var(--h, 0) * var(--pxh, 1px));
+    top: calc(var(--h, 0) * var(--pxh, 1px) + var(--g, 0px));
     background: rgba(255,255,255,.12);      /* 仍比日线淡，但能看清 */
   }
   .hourline.half { background: rgba(255,255,255,.06); }   /* 120+ 档的半小时线，再淡一档 */
   .hourlabel {
     position: absolute; right: calc(100% - var(--gutter) + 2px);
-    top: calc(var(--h, 0) * var(--pxh, 1px));
+    top: calc(var(--h, 0) * var(--pxh, 1px) + var(--g, 0px));
     font-size: calc(11px * var(--font-scale, 1)); color: #A8AAB8;
     line-height: 1.15; white-space: nowrap;
     padding: 1px 4px; border-radius: 4px;
@@ -1385,7 +1385,21 @@
 
   const pad = n => String(n).padStart(2, "0");
   const hhmm = ts => { const d = new Date(ts); return pad(d.getHours()) + ":" + pad(d.getMinutes()); };
-  const yOf = ts => ((ts - canvasStart) / 60000) * PX_PER_MIN;
+  const GAP_H = 28;             // 每条全天行在日界处占的高度
+  let gapDays = [];             // 当前轨道有全天行的日期（0 点），升序
+
+  function gapsBefore(ts) {
+    let n = 0;
+    for (const d of gapDays) {
+      if (d <= ts + 0.5) n++;
+      else break;
+    }
+    return n;
+  }
+
+  /* 时间 -> canvasInner 内 y：线性部分 + 该时刻之前（含当天）的间隙 */
+  const yOf = ts =>
+    ((ts - canvasStart) / 60000) * PX_PER_MIN + gapsBefore(ts) * GAP_H;
 
   const WEEK = ["周日","周一","周二","周三","周四","周五","周六"];
   document.getElementById("dateText").textContent = (NOW.getMonth() + 1) + "月" + NOW.getDate() + "日";
@@ -1398,10 +1412,13 @@
   const canvasInner = document.createElement("div");
   canvasInner.className = "canvas-inner";
   canvas.appendChild(canvasInner);
+  const nowlineEl = document.getElementById("nowline");
+  const nowbadgeEl = document.querySelector(".nowbadge");
 
   /* canvas 高度：至少铺满日期范围，同时保证 now 线连着徽标都在内容里 */
   function timelineHeight() {
-    return Math.ceil(Math.max(DAYS * 24 * PX_PER_HOUR, yOf(Date.now()) + 56));
+    const full = DAYS * 24 * PX_PER_HOUR + gapDays.length * GAP_H;
+    return Math.ceil(Math.max(full, yOf(Date.now()) + 56));
   }
 
   /* 首尾各留半屏占位，保证 now 在最前/最后也能居中（不改变时间坐标） */
@@ -1421,15 +1438,32 @@
     const rect = canvas.getBoundingClientRect();
     return rect.height ? canvas.offsetHeight / rect.height : 1;
   }
+  /* canvasInner 内的 y -> 绝对分钟：先逐段跳过全天行的间隙 */
+  function minuteOfContentY(y) {
+    let gaps = 0;
+    for (const day of gapDays) {
+      const lin = ((day - canvasStart) / 60000) * PX_PER_MIN;
+      const bandStart = lin + gaps * GAP_H;        // 这条间隙的上沿
+      const bandEnd = bandStart + GAP_H;           // 当天内容起点
+      if (y < bandEnd) {
+        if (y >= bandStart) return day / 60000;    // 落在间隙里：算当天 00:00
+        return canvasStart / 60000 + (y - gaps * GAP_H) / PX_PER_MIN;
+      }
+      gaps += 1;
+    }
+    return canvasStart / 60000 + (y - gaps * GAP_H) / PX_PER_MIN;
+  }
+
   /* clientY → 绝对分钟（epoch 分钟，未吸附）；minuteToY 是它的逆运算 */
   function yToMinute(clientY) {
     const rect = canvas.getBoundingClientRect();
-    return canvasStart / 60000
-           + (((clientY - rect.top) * canvasYRatio()) - padTop) / PX_PER_MIN;
+    const y = ((clientY - rect.top) * canvasYRatio()) - padTop;
+    return minuteOfContentY(y);
   }
   function minuteToY(minute) {
     const rect = canvas.getBoundingClientRect();
-    const y = padTop + (((minute * 60000) - canvasStart) / 60000) * PX_PER_MIN;
+    const ts = minute * 60000;
+    const y = padTop + ((ts - canvasStart) / 60000) * PX_PER_MIN + gapsBefore(ts) * GAP_H;
     return rect.top + y / canvasYRatio();
   }
   function snapMinute(minute) {
@@ -1450,7 +1484,7 @@
     const box = scroll.getBoundingClientRect();
     const view = visibleTimeRect();
     const offset = (view.center - box.top) * canvasYRatio();
-    return Math.max(0, padTop + ((ts - canvasStart) / 60000) * PX_PER_MIN - offset);
+    return Math.max(0, padTop + yOf(ts) - offset);
   }
 
   /* padding 随可见区变化重算；内容整体下移，scroll 定位统一走 centeredScrollTop */
@@ -1474,7 +1508,7 @@
     for (let i = 0; i < DAYS; i++) {
     const ts = canvasStart + i * DAY;
     const d = new Date(ts);
-    const y = i * 24 * PX_PER_HOUR;
+    const y = yOf(canvasStart + i * DAY);
 
     const line = document.createElement("div");
     line.className = "dayline";
@@ -1542,13 +1576,18 @@
     allDayRows = [];
     const key = document.getElementById("timeline").dataset.track;
     const byDay = allDayByDay(key);
-    [...byDay.keys()].sort((a, b) => a - b).forEach(day => {
+    const days = [...byDay.keys()].sort((a, b) => a - b);
+    const gapSig = days.join(",");
+    const gapsChanged = gapSig !== gapDays.join(",");
+    gapDays = days;
+    days.forEach(day => {
       const list = byDay.get(day);
       const el = document.createElement("div");
       el.className = "allday-row";
       el.dataset.day = String(day);
-      el.style.top = yOf(day) + "px";
+      el.style.top = (yOf(day) - GAP_H) + "px";   // 行占的是 00:00 前的间隙
 
+      el.addEventListener("contextmenu", e => e.preventDefault());   // 间隙里不弹系统菜单
       const label = document.createElement("span");
       label.className = "adate";
       const d = new Date(day);
@@ -1618,9 +1657,30 @@
       }
 
       canvasInner.appendChild(el);
-      allDayRows.push({ el, y: yOf(day), day, key, list });
+      allDayRows.push({ el, y: yOf(day) - GAP_H, day, key, list });
     });
+    if (gapsChanged) refreshGapLayout();
     updatePinnedRows();
+  }
+
+  /* 间隙数量变了：canvas 高度、日线、刻度、now 线都要重算 */
+  function refreshGapLayout() {
+    applyCanvasHeight();
+    dayMarks.forEach(mark => {
+      const y = yOf(canvasStart + mark.index * DAY);
+      mark.line.style.top = y + "px";
+      mark.label.style.top = y + "px";
+    });
+    syncHourTicks(true);
+    /* 间隙变了，已经挂上的卡片要按新坐标重新落位 */
+    ["sched", "due"].forEach(key => {
+      items[key].forEach(item => {
+        item.y = yOf(base + item.t[item.key] * H);
+        applyChipSpanHeight(item);
+      });
+      layoutLane(key);
+    });
+    updateNowMarker();
   }
 
   /* 吸顶：pinnedY 是可见时间区顶部在 canvasInner 坐标系里的 y */
@@ -1634,7 +1694,7 @@
     for (let i = 0; i < allDayRows.length; i++) {
       const r = allDayRows[i];
       if (pinned + 0.5 < r.y) break;                 // 还没滚到这条
-      if (pinned < r.y + 24 * PX_PER_HOUR) active = i;   // 当前还在这一天的范围内
+      if (pinned < r.y + GAP_H + 24 * PX_PER_HOUR) active = i;   // 当前仍在这一天（含行自身间隙）
     }
 
     allDayRows.forEach((r, i) => {
@@ -1646,8 +1706,8 @@
       const row = allDayRows[active];
       let dy = pinned - row.y;
       const next = allDayRows[active + 1];
-      if (next && next.y < pinned + 28) {
-        dy -= (pinned + 28 - next.y);                // 下一条顶上来，把当前这条推出去
+      if (next && next.y < pinned + GAP_H) {
+        dy -= (pinned + GAP_H - next.y);              // 下一条顶上来，把当前这条推出去
       }
       row.el.style.transform = "translateY(" + dy + "px)";
     }
@@ -1712,7 +1772,8 @@
       if (inTimeline(pointerX, pointerY)) {
         band.style.display = "";
         band.style.top = yOf(startMin * 60000) + "px";
-        band.style.height = Math.max(6, 60 * PX_PER_MIN) + "px";
+        band.style.height = Math.max(
+          6, yOf((startMin + 60) * 60000) - yOf(startMin * 60000)) + "px";
         dragtip.textContent = hhmm(startMin * 60000) + "–" + hhmm((startMin + 60) * 60000);
         dragtip.classList.add("on");
         placeDragTip(pointerX, pointerY);
@@ -1820,7 +1881,7 @@
     const end = t[END_KEY[key]];
     let h = baseH;
     if (!allDay && typeof end === "number" && end > t[key]) {
-      h = Math.max(baseH, (end - t[key]) * 60 * PX_PER_MIN);
+      h = Math.max(baseH, yOf(base + end * H) - yOf(base + t[key] * H));
       el.style.height = h + "px";
       el.classList.add("sized");
     }
@@ -1835,7 +1896,7 @@
     const end = t[END_KEY[key]];
     let h = baseH;
     if (!t[ALL_DAY_KEY[key]] && typeof end === "number" && end > t[key]) {
-      h = Math.max(baseH, (end - t[key]) * 60 * PX_PER_MIN);
+      h = Math.max(baseH, yOf(base + end * H) - yOf(base + t[key] * H));
     }
     el.style.height = h === baseH ? "" : h + "px";
     item.h = h;
@@ -1909,7 +1970,8 @@
       const bottomMin = curEnd === null ? endMin0 : curEnd;
       el.style.top = yOf(base + topMin * 60000) + "px";
       if (curEnd !== null) {
-        el.style.height = Math.max(baseH, (bottomMin - topMin) * PX_PER_MIN) + "px";
+        el.style.height = Math.max(
+          baseH, yOf(base + bottomMin * 60000) - yOf(base + topMin * 60000)) + "px";
       }
       dragtip.textContent = allDay
         ? hhmm(base + curStart * 60000) + "–" + hhmm(base + curEnd * 60000)
@@ -2469,12 +2531,14 @@
         const line = document.createElement("div");
         line.className = "hourline" + (h % 1 ? " half" : "");
         line.style.setProperty("--h", String(h));
+        line.style.setProperty("--g", (gapsBefore(canvasStart + h * H) * GAP_H) + "px");
         hourLayer.appendChild(line);
       }
       if (labelEvery && Math.abs(h % labelEvery) < 1e-9) {
         const label = document.createElement("div");
         label.className = "hourlabel" + (midnight ? " midnight" : "");
         label.style.setProperty("--h", String(h));
+        label.style.setProperty("--g", (gapsBefore(canvasStart + h * H) * GAP_H) + "px");
         label.textContent = String(Math.round(h) % 24).padStart(2, "0");
         hourLayer.appendChild(label);
       }
@@ -2605,8 +2669,6 @@
   }
 
   /* now 标记写进 canvas：随内容滚动，每 30s 刷新位置与时间 */
-  const nowlineEl = document.getElementById("nowline");
-  const nowbadgeEl = document.querySelector(".nowbadge");
   canvasInner.insertBefore(nowlineEl, lanes.sched);   // 线在卡片下面
   canvasInner.appendChild(nowbadgeEl);                // 徽标在最上面
 
@@ -2747,7 +2809,7 @@
 
     applyCanvasHeight();
     dayMarks.forEach(mark => {
-      const y = mark.index * 24 * PX_PER_HOUR;
+      const y = yOf(canvasStart + mark.index * DAY);
       mark.line.style.top = y + "px";
       mark.label.style.top = y + "px";
     });
@@ -2768,15 +2830,14 @@
       if (!fast) layoutLane(key);   // 重算避让与 tick
     });
     allDayRows.forEach(r => {       // 全天行跟着 px/h 重新定位
-      r.y = yOf(r.day);
+      r.y = yOf(r.day) - GAP_H;
       r.el.style.top = r.y + "px";
     });
     const rect = scroll.getBoundingClientRect();
     const fromTop = (typeof anchorY === "number")
       ? (anchorY - rect.top) * canvasYRatio()
       : (visibleTimeRect().center - rect.top) * canvasYRatio();
-    scroll.scrollTop = Math.max(
-      0, padTop + ((anchorTs - canvasStart) / 60000) * PX_PER_MIN - fromTop);
+    scroll.scrollTop = Math.max(0, padTop + yOf(anchorTs) - fromTop);
     updatePinnedRows();
     updateScaleLabel();
     return PX_PER_HOUR;
@@ -3248,7 +3309,9 @@
     const el = document.createElement("div");
     el.className = "phcard";
     const phTop = yOf(startMin * 60000);
-    const phH = endMin ? Math.max(34, (endMin - startMin) * PX_PER_MIN) : 34;
+    const phH = endMin
+      ? Math.max(34, yOf(endMin * 60000) - yOf(startMin * 60000))
+      : 34;
     el.style.top = phTop + "px";
     if (endMin) el.style.height = phH + "px";
     el.style.left = "7px";
@@ -3339,7 +3402,7 @@
   scroll.addEventListener("click", e => {
     if (suppressClick) { suppressClick = false; return; }
     if (dragActive || resizing) return;          // 拖拽刚结束的那一帧不建卡
-    if (e.target.closest(".chip, .phcard, button, input")) return;
+    if (e.target.closest(".chip, .phcard, .allday-row, button, input")) return;
     if (!inLaneX(e.clientX)) return;
     if (detail.classList.contains("open")) { closeDetail(); return; }
     if (settings.classList.contains("open")) { settings.classList.remove("open"); return; }
@@ -3352,7 +3415,7 @@
   scroll.addEventListener("pointerdown", e => {
     if (e.button !== 0) return;
     if (dragActive || resizing) return;
-    if (e.target.closest(".chip, .phcard, button, input")) return;
+    if (e.target.closest(".chip, .phcard, .allday-row, button, input")) return;
     if (!inLaneX(e.clientX)) return;
     startBand(e);
   });
@@ -3380,7 +3443,8 @@
       const top = Math.min(startMin, curMin);
       const bottom = Math.max(startMin, curMin);
       band.style.top = yOf(top * 60000) + "px";
-      band.style.height = Math.max(4, (bottom - top) * PX_PER_MIN) + "px";
+      band.style.height = Math.max(
+        4, yOf(bottom * 60000) - yOf(top * 60000)) + "px";
     };
 
     const schedule = y => {
