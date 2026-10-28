@@ -267,6 +267,7 @@
     cursor: pointer; white-space: nowrap;
   }
   .allitem:hover { background: rgba(255,255,255,.1); color: var(--text); }
+  .allitem { user-select: none; touch-action: none; }
   .allitem .dot { margin-top: 0; }
   .allitem .nm { overflow: hidden; text-overflow: ellipsis; }
   .allitem.done { opacity: .55; }
@@ -275,6 +276,24 @@
     height: 18px; padding: 0 7px; border-radius: 6px;
     border: 1px dashed rgba(255,255,255,.14); background: transparent;
     color: var(--faint); font-family: inherit; font-size: 10px; cursor: default;
+  }
+  /* 全天 pill 拖入时间轴：影子 + 1 小时预览带 */
+  .alldrag-ghost {
+    position: fixed; z-index: 80; pointer-events: none;
+    max-width: 180px; height: 20px; padding: 0 8px;
+    line-height: 20px; border-radius: 6px;
+    background: rgba(30,32,40,.85);
+    border: 1px solid rgba(255,255,255,.22);
+    box-shadow: 0 8px 22px -6px rgba(0,0,0,.8);
+    color: #E6E6EC; font-size: 10.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    opacity: .88;
+  }
+  .alldrag-band {
+    position: absolute; left: 7px; right: 6px; z-index: 12;
+    background: rgba(124,140,255,.16);
+    border: 1px dashed rgba(124,140,255,.65);
+    border-radius: 7px; pointer-events: none;
   }
 
   /* ---------------- 时间线 ---------------- */
@@ -1422,6 +1441,10 @@
   function snapMinute(minute) {
     return Math.round(minute / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
   }
+  /* 向上吸附：09:07 -> 09:15（留一点 epsilon，正好落在刻度上时不跳下一格） */
+  function snapMinuteUp(minute) {
+    return Math.ceil((minute - 1e-6) / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
+  }
   /* 真正可见的时间区：scroll 视口扣掉顶部 trackbar 覆盖和底部抽屉 */
   function visibleTimeRect() {
     const box = scroll.getBoundingClientRect();
@@ -1555,7 +1578,13 @@
         item.append(dot, name);
         item.addEventListener("click", e => {
           e.stopPropagation();
+          if (Date.now() - (item._dragEndedAt || 0) < 300) return;   // 刚拖过，不当点击
           openDetail(t, key, item);
+        });
+        item.addEventListener("pointerdown", e => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          startAllDayDrag(e, t, key, item);
         });
         item.addEventListener("contextmenu", e => {
           e.preventDefault();
@@ -1601,6 +1630,130 @@
       allStrip.classList.add("fade");
     }
     allStripDay = day;
+  }
+
+  /* 把全天 pill 拖进时间轴：松手处 = start（15min 吸附），固定时长 1 小时 */
+  function startAllDayDrag(e, t, key, el) {
+    const startX = e.clientX, startY = e.clientY;
+    let pointerX = startX, pointerY = startY;
+    let dragging = false;
+    let ghost = null, band = null;
+    let rafId = 0;
+
+    dragActive = true;
+    if (e.pointerId !== undefined && el.setPointerCapture) {
+      try { el.setPointerCapture(e.pointerId); } catch (_err) { /* 捕获失败不影响 */ }
+    }
+
+    function inTimeline(x, y) {
+      const box = scroll.getBoundingClientRect();
+      const view = visibleTimeRect();
+      const laneLeft = lanes[key].getBoundingClientRect().left;
+      return x >= laneLeft && x <= box.right && y >= view.top && y <= view.bottom;
+    }
+
+    const ensureVisuals = () => {
+      if (ghost) return;
+      ghost = document.createElement("div");
+      ghost.className = "alldrag-ghost";
+      ghost.textContent = t.title || "(无标题)";
+      document.body.appendChild(ghost);
+      band = document.createElement("div");
+      band.className = "alldrag-band";
+      band.style.display = "none";
+      lanes[key].appendChild(band);
+      document.body.classList.add("drag-lock");
+    };
+
+    const render = () => {
+      ensureVisuals();
+      const startMin = snapMinuteUp(yToMinute(pointerY));
+      ghost.style.left = Math.max(4, pointerX + 12) + "px";
+      ghost.style.top = Math.max(4, pointerY + 12) + "px";
+      if (inTimeline(pointerX, pointerY)) {
+        band.style.display = "";
+        band.style.top = yOf(startMin * 60000) + "px";
+        band.style.height = Math.max(6, 60 * PX_PER_MIN) + "px";
+        dragtip.textContent = hhmm(startMin * 60000) + "–" + hhmm((startMin + 60) * 60000);
+        dragtip.classList.add("on");
+        placeDragTip(pointerX, pointerY);
+      } else {
+        band.style.display = "none";
+        dragtip.classList.remove("on");
+      }
+    };
+
+    const schedule = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => { rafId = 0; render(); });
+    };
+
+    const cleanup = () => {
+      dragActive = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (e.pointerId !== undefined && el.releasePointerCapture) {
+        try { el.releasePointerCapture(e.pointerId); } catch (_err) { /* 已释放 */ }
+      }
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      document.body.classList.remove("drag-lock");
+      dragtip.classList.remove("on");
+      if (ghost) { ghost.remove(); ghost = null; }
+      if (band) { band.remove(); band = null; }
+    };
+
+    const onMove = ev => {
+      if (e.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
+      pointerX = ev.clientX;
+      pointerY = ev.clientY;
+      if (!dragging) {
+        if (Math.abs(ev.clientX - startX) < DRAG_CLICK_PX &&
+            Math.abs(ev.clientY - startY) < DRAG_CLICK_PX) return;
+        dragging = true;
+        el.style.opacity = ".6";
+      }
+      schedule();
+    };
+
+    const onCancel = () => {
+      el.style.opacity = "";
+      cleanup();
+    };
+
+    const onUp = async () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (dragging) render();
+      const dropped = dragging && inTimeline(pointerX, pointerY);
+      const startMin = dropped ? snapMinuteUp(yToMinute(pointerY)) : null;
+      el.style.opacity = "";
+      cleanup();
+      if (!dragging) return;              // 位移不足：交给 click 打开详情
+      el._dragEndedAt = Date.now();
+      suppressClickOnce();
+      if (!dropped) return;               // 松手在时间轴外：取消，不发请求
+
+      const api = bridge();
+      if (!api) return;
+      const endMin = startMin + 60;
+      const res = await api.resize_task(
+        t.id, TRACK_PROP[key], pointOfMinute(startMin), pointOfMinute(endMin));
+      if (res && res.ok && res.task) {
+        const ui = res.task;
+        ["title", "status", "tag", "dir", "subject", "sched", "due",
+         "allDaySched", "allDayDue", "endSched", "endDue"].forEach(k => {
+          if (k in ui) t[k] = ui[k];
+          else delete t[k];
+        });
+        refreshChips(t);                  // lane 补卡 + strip 重新算（pill 消失）
+      } else {
+        toast("转为定时失败：" + ((res && res.error) || "未知错误"));
+      }
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   }
 
   let allStripRaf = 0;
