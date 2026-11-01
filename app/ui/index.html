@@ -823,16 +823,23 @@
   .detail .dseg button.on {
     background: rgba(124,140,255,.2); border-color: rgba(124,140,255,.45); color: #E9EAF2;
   }
-  .detail .drow { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
-  .detail .dlab { width: 32px; flex: none; font-size: 10px; color: var(--faint); }
+  .detail .drow { display: flex; align-items: center; gap: 3px; margin-bottom: 6px; flex-wrap: nowrap; }
+  .detail .dlab { width: 26px; flex: none; font-size: 10px; color: var(--faint); }
   .detail .ddate, .detail .dtime, .detail .dsel {
     height: 23px; padding: 0 4px; border-radius: 6px; outline: 0;
     border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.05);
     color: var(--text); font-family: inherit; font-size: 10.5px;
   }
   .detail .ddate { flex: 1; min-width: 0; }
-  .detail .dtime { width: 58px; flex: none; }
+  .detail .dtime { width: 56px; flex: none; }
+  .detail .dtime.end { width: 56px; }
   .detail .dtime:disabled { opacity: .35; }
+  .detail .dsep {
+    flex: none; width: 16px; text-align: center;
+    font-size: 8.5px; color: var(--faint); letter-spacing: 0;
+  }
+  .detail .dsep.next { color: #B9BEFF; font-size: 8px; }
+  .detail .dall { font-size: 9px; }
   .detail .dsel { flex: 1; min-width: 0; }
   .detail .dall { display: flex; align-items: center; gap: 3px; flex: none;
                   font-size: 9.5px; color: var(--faint); }
@@ -1173,13 +1180,17 @@
   <div class="drow" data-date="安排日期">
     <span class="dlab">安排</span>
     <input class="ddate" type="date">
-    <input class="dtime" type="time">
+    <input class="dtime" type="time" title="开始时间">
+    <span class="dsep">–</span>
+    <input class="dtime end" type="time" title="结束时间（留空 = 单点）">
     <label class="dall"><input type="checkbox" class="dallbox">全天</label>
   </div>
   <div class="drow" data-date="截止日期">
     <span class="dlab">截止</span>
     <input class="ddate" type="date">
-    <input class="dtime" type="time">
+    <input class="dtime" type="time" title="开始时间">
+    <span class="dsep">–</span>
+    <input class="dtime end" type="time" title="结束时间（留空 = 单点）">
     <label class="dall"><input type="checkbox" class="dallbox">全天</label>
   </div>
   <div class="drow"><span class="dlab">大方向</span><select class="dsel" id="dDir"></select></div>
@@ -3711,20 +3722,45 @@
     return detail.querySelector('.drow[data-date="' + name + '"]');
   }
 
-  function setRow(name, hours, allDay) {
+  function setDayHint(row) {
+    const start = row.querySelector(".dtime:not(.end)").value;
+    const end = row.querySelector(".dtime.end").value;
+    const sep = row.querySelector(".dsep");
+    const allDay = row.querySelector(".dallbox").checked;
+    const next = !allDay && !!start && !!end && end <= start;
+    sep.textContent = next ? "次日" : "–";
+    sep.classList.toggle("next", next);
+  }
+
+  function setRow(name, hours, allDay, endHours) {
     const row = dateRow(name);
     const dateEl = row.querySelector(".ddate");
-    const timeEl = row.querySelector(".dtime");
+    const timeEl = row.querySelector(".dtime:not(.end)");
+    const endEl = row.querySelector(".dtime.end");
     const box = row.querySelector(".dallbox");
     if (typeof hours !== "number") {
-      dateEl.value = ""; timeEl.value = ""; box.checked = false; timeEl.disabled = false;
+      dateEl.value = "";
+      timeEl.value = "";
+      endEl.value = "";
+      box.checked = false;
+      timeEl.disabled = false;
+      endEl.disabled = false;
+      setDayHint(row);
       return;
     }
     const d = new Date(base + hours * H);
     dateEl.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
     box.checked = !!allDay;
     timeEl.value = allDay ? "" : pad(d.getHours()) + ":" + pad(d.getMinutes());
+    let endText = "";
+    if (!allDay && typeof endHours === "number" && endHours > hours) {
+      const ed = new Date(base + endHours * H);
+      endText = pad(ed.getHours()) + ":" + pad(ed.getMinutes());
+    }
+    endEl.value = endText;
     timeEl.disabled = !!allDay;
+    endEl.disabled = !!allDay;
+    setDayHint(row);
   }
 
   function rowValue(name) {
@@ -3732,26 +3768,22 @@
     const start = row.querySelector(".ddate").value;
     if (!start) return null;
     const allDay = row.querySelector(".dallbox").checked;
-    const time = allDay ? "" : row.querySelector(".dtime").value;
-    if (!time) return { start: start, start_time: null };   // 只有日期 = 全天
-
-    /* 定时：保留原时长；原来是全天/没有 end 就默认 1 小时 */
-    const key = name === "安排日期" ? "sched" : "due";
-    const endKey = name === "安排日期" ? "endSched" : "endDue";
-    let minutes = 60;
-    if (detailTask && typeof detailTask[key] === "number" &&
-        typeof detailTask[endKey] === "number" && detailTask[endKey] > detailTask[key]) {
-      minutes = Math.max(15, Math.round((detailTask[endKey] - detailTask[key]) * 60));
+    const time = allDay ? "" : row.querySelector(".dtime:not(.end)").value;
+    const endTime = allDay ? "" : row.querySelector(".dtime.end").value;
+    if (!time) {
+      return { start: start, start_time: null, end_date: null, end_time: null };
     }
-    const startDt = new Date(start + "T" + time);
-    const endDt = new Date(startDt.getTime() + minutes * 60000);
-    const endDate = endDt.getFullYear() + "-" + pad(endDt.getMonth() + 1) + "-" + pad(endDt.getDate());
-    return {
-      start: start,
-      start_time: time,
-      end: endDate,
-      end_time: pad(endDt.getHours()) + ":" + pad(endDt.getMinutes()),
-    };
+    if (!endTime) {
+      return { start: start, start_time: time, end_date: null, end_time: null };  // 单点
+    }
+    /* 结束早于/等于开始 -> 次日 */
+    let endDate = start;
+    if (endTime <= time) {
+      const d = new Date(start + "T00:00");
+      d.setDate(d.getDate() + 1);
+      endDate = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+    }
+    return { start: start, start_time: time, end_date: endDate, end_time: endTime };
   }
 
   /* 下拉选项：优先用后端给的，缺失时从现有任务里现凑 */
@@ -4092,8 +4124,8 @@
     dTitle.value = t.title || "";
     dStatus.querySelectorAll("button").forEach(b =>
       b.classList.toggle("on", b.dataset.status === (t.status || "todo")));
-    setRow("安排日期", t.sched, t.allDaySched);
-    setRow("截止日期", t.due, t.allDayDue);
+    setRow("安排日期", t.sched, t.allDaySched, t.endSched);
+    setRow("截止日期", t.due, t.allDayDue, t.endDue);
     fillSelect(dDir, taskOptions("大方向"), t.dir);
     fillSelect(dSubject, taskOptions("学科"), t.subject);
     detailBusy = false;
@@ -4121,9 +4153,12 @@
       const row = dateRow(name);
       const allDay = !!(v && !v.start_time);
       row.querySelector(".ddate").value = v ? v.start : "";
-      row.querySelector(".dtime").value = v && v.start_time ? v.start_time : "";
+      row.querySelector(".dtime:not(.end)").value = v && v.start_time ? v.start_time : "";
+      row.querySelector(".dtime.end").value = v && v.end_time ? v.end_time : "";
       row.querySelector(".dallbox").checked = allDay;
-      row.querySelector(".dtime").disabled = allDay;
+      row.querySelector(".dtime:not(.end)").disabled = allDay;
+      row.querySelector(".dtime.end").disabled = allDay;
+      setDayHint(row);
     });
     dDir.value = detailSaved.dir || "";
     dSubject.value = detailSaved.subject || "";
@@ -4241,13 +4276,17 @@
   });
   DATE_ROWS.forEach(name => {
     const row = dateRow(name);
+    const startEl = row.querySelector(".dtime:not(.end)");
+    const endEl = row.querySelector(".dtime.end");
     row.querySelector(".ddate").addEventListener("change", scheduleSave);
-    row.querySelector(".dtime").addEventListener("change", scheduleSave);
+    startEl.addEventListener("change", () => { setDayHint(row); scheduleSave(); });
+    endEl.addEventListener("change", () => { setDayHint(row); scheduleSave(); });
     row.querySelector(".dallbox").addEventListener("change", () => {
       const box = row.querySelector(".dallbox");
-      const timeEl = row.querySelector(".dtime");
-      timeEl.disabled = box.checked;
-      if (box.checked) timeEl.value = "";
+      startEl.disabled = box.checked;
+      endEl.disabled = box.checked;
+      if (box.checked) { startEl.value = ""; endEl.value = ""; }
+      setDayHint(row);
       scheduleSave();
     });
   });

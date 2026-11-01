@@ -1400,9 +1400,10 @@ class Api:
                 return {"ok": False, "error": f"不支持的日期属性：{name}"}
             if not isinstance(value, dict) or not value.get("start"):
                 return {"ok": False, "error": f"「{name}」缺少 start"}
+            end_date = value.get("end_date") or value.get("end")
             dates[name] = DateValue(
                 start=str(value["start"]),
-                end=str(value["end"]) if value.get("end") else None,
+                end=str(end_date) if end_date else None,
                 start_time=str(value["start_time"]) if value.get("start_time") else None,
                 end_time=str(value["end_time"]) if value.get("end_time") else None,
                 time_zone=str(value.get("time_zone") or TZ),
