@@ -824,8 +824,11 @@
     background: rgba(124,140,255,.2); border-color: rgba(124,140,255,.45); color: #E9EAF2;
   }
   .detail .drow { display: flex; align-items: center; gap: 3px; margin-bottom: 6px; flex-wrap: nowrap; }
+  .detail .drow-date { display: block; }
+  .detail .dline { display: flex; align-items: center; gap: 3px; }
+  .detail .dline2 { margin-top: 3px; padding-left: 29px; }
   .detail .dlab { width: 26px; flex: none; font-size: 10px; color: var(--faint); }
-  .detail .ddate, .detail .dtime, .detail .dsel {
+  .detail .ddate, .detail .dtime, .detail .ddur, .detail .dsel {
     height: 23px; padding: 0 4px; border-radius: 6px; outline: 0;
     border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.05);
     color: var(--text); font-family: inherit; font-size: 10.5px;
@@ -834,11 +837,23 @@
   .detail .dtime { width: 56px; flex: none; }
   .detail .dtime.end { width: 56px; }
   .detail .dtime:disabled { opacity: .35; }
-  .detail .dsep {
-    flex: none; width: 16px; text-align: center;
-    font-size: 8.5px; color: var(--faint); letter-spacing: 0;
+  .detail .ddur { width: 56px; flex: none; }
+  .detail .ddur:disabled { opacity: .35; }
+  .detail .dmode {
+    display: inline-flex; flex: none; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.09); border-radius: 5px;
   }
-  .detail .dsep.next { color: #B9BEFF; font-size: 8px; }
+  .detail .dmode button {
+    height: 18px; padding: 0 5px; border: 0; background: transparent;
+    color: var(--faint); font-family: inherit; font-size: 8.5px; cursor: pointer;
+  }
+  .detail .dmode button.on { background: rgba(124,140,255,.22); color: #E9EAF2; }
+  .detail .dmode button:disabled { opacity: .4; cursor: default; }
+  .detail .dcalc {
+    flex: 1; min-width: 0; font-size: 8.5px; color: var(--faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .detail .dcalc.next { color: #B9BEFF; }
   .detail .dall { font-size: 9px; }
   .detail .dsel { flex: 1; min-width: 0; }
   .detail .dall { display: flex; align-items: center; gap: 3px; flex: none;
@@ -1177,21 +1192,39 @@
     <button data-status="doing">进行中</button>
     <button data-status="done">已完成</button>
   </div>
-  <div class="drow" data-date="安排日期">
-    <span class="dlab">安排</span>
-    <input class="ddate" type="date">
-    <input class="dtime" type="time" title="开始时间">
-    <span class="dsep">–</span>
-    <input class="dtime end" type="time" title="结束时间（留空 = 单点）">
-    <label class="dall"><input type="checkbox" class="dallbox">全天</label>
+  <div class="drow drow-date" data-date="安排日期">
+    <div class="dline">
+      <span class="dlab">安排</span>
+      <input class="ddate" type="date">
+      <input class="dtime start" type="time" title="开始时间">
+      <label class="dall"><input type="checkbox" class="dallbox">全天</label>
+    </div>
+    <div class="dline dline2">
+      <span class="dmode">
+        <button type="button" data-mode="end">结束</button>
+        <button type="button" data-mode="dur">时长</button>
+      </span>
+      <input class="dtime end" type="time" title="结束时间（留空 = 单点）">
+      <input class="ddur" type="text" inputmode="numeric" placeholder="h:mm / 90m" title="时长（h:mm 或 90m）">
+      <span class="dcalc"></span>
+    </div>
   </div>
-  <div class="drow" data-date="截止日期">
-    <span class="dlab">截止</span>
-    <input class="ddate" type="date">
-    <input class="dtime" type="time" title="开始时间">
-    <span class="dsep">–</span>
-    <input class="dtime end" type="time" title="结束时间（留空 = 单点）">
-    <label class="dall"><input type="checkbox" class="dallbox">全天</label>
+  <div class="drow drow-date" data-date="截止日期">
+    <div class="dline">
+      <span class="dlab">截止</span>
+      <input class="ddate" type="date">
+      <input class="dtime start" type="time" title="开始时间">
+      <label class="dall"><input type="checkbox" class="dallbox">全天</label>
+    </div>
+    <div class="dline dline2">
+      <span class="dmode">
+        <button type="button" data-mode="end">结束</button>
+        <button type="button" data-mode="dur">时长</button>
+      </span>
+      <input class="dtime end" type="time" title="结束时间（留空 = 单点）">
+      <input class="ddur" type="text" inputmode="numeric" placeholder="h:mm / 90m" title="时长（h:mm 或 90m）">
+      <span class="dcalc"></span>
+    </div>
   </div>
   <div class="drow"><span class="dlab">大方向</span><select class="dsel" id="dDir"></select></div>
   <div class="drow"><span class="dlab">学科</span><select class="dsel" id="dSubject"></select></div>
@@ -3722,45 +3755,130 @@
     return detail.querySelector('.drow[data-date="' + name + '"]');
   }
 
-  function setDayHint(row) {
-    const start = row.querySelector(".dtime:not(.end)").value;
-    const end = row.querySelector(".dtime.end").value;
-    const sep = row.querySelector(".dsep");
+  /* 时长输入：h:mm 或 90m，统一成分钟 */
+  function parseDuration(text) {
+    const raw = String(text || "").trim().toLowerCase();
+    if (!raw) return null;
+    let m = raw.match(/^(\d+)\s*m$/);
+    if (m) return parseInt(m[1], 10);
+    m = raw.match(/^(\d+)\s*[:：]\s*(\d{1,2})$/);
+    if (m) {
+      const h = parseInt(m[1], 10), mm = parseInt(m[2], 10);
+      if (mm < 60) return h * 60 + mm;
+    }
+    return null;
+  }
+
+  function formatDuration(minutes) {
+    const m = Math.max(0, Math.round(minutes));
+    return Math.floor(m / 60) + ":" + pad(m % 60);
+  }
+
+  function timeToMin(text) {
+    if (!text) return null;
+    const parts = text.split(":");
+    if (parts.length !== 2) return null;
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+  }
+
+  function setRowMode(row, mode) {
+    row.dataset.mode = mode;
+    row.querySelectorAll(".dmode button").forEach(b =>
+      b.classList.toggle("on", b.dataset.mode === mode));
+    row.querySelector(".dtime.end").style.display = mode === "end" ? "" : "none";
+    row.querySelector(".ddur").style.display = mode === "dur" ? "" : "none";
+    updateRowCalc(row);
+  }
+
+  function updateRowCalc(row) {
+    const calc = row.querySelector(".dcalc");
+    const start = row.querySelector(".dtime.start").value;
     const allDay = row.querySelector(".dallbox").checked;
-    const next = !allDay && !!start && !!end && end <= start;
-    sep.textContent = next ? "次日" : "–";
-    sep.classList.toggle("next", next);
+    calc.textContent = "";
+    calc.classList.remove("next");
+    if (allDay || !start) return;
+
+    if (row.dataset.mode === "end") {
+      const end = row.querySelector(".dtime.end").value;
+      if (end && end <= start) {
+        calc.textContent = "次日";
+        calc.classList.add("next");
+      }
+      return;
+    }
+
+    const mins = parseDuration(row.querySelector(".ddur").value);
+    if (mins == null || mins <= 0) return;
+    const total = timeToMin(start) + mins;
+    const days = Math.floor(total / 1440);
+    const tod = ((total % 1440) + 1440) % 1440;
+    calc.textContent = "→ " + pad(Math.floor(tod / 60)) + ":" + pad(tod % 60) +
+      (days === 1 ? " · 次日" : days > 1 ? " · +" + days + "天" : "");
+    if (days) calc.classList.add("next");
+  }
+
+  /* 切换模式：当前值互算；只改表单，不触发保存 */
+  function switchRowMode(row, mode) {
+    if (row.dataset.mode === mode) return;
+    const start = timeToMin(row.querySelector(".dtime.start").value);
+    const endEl = row.querySelector(".dtime.end");
+    const durEl = row.querySelector(".ddur");
+    if (mode === "dur") {
+      const end = timeToMin(endEl.value);
+      if (start != null && end != null) {
+        let diff = end - start;
+        if (diff <= 0) diff += 1440;
+        durEl.value = formatDuration(diff);
+      } else {
+        durEl.value = "";
+      }
+    } else {
+      const mins = parseDuration(durEl.value);
+      if (start != null && mins != null && mins > 0) {
+        const tod = ((start + mins) % 1440 + 1440) % 1440;
+        endEl.value = pad(Math.floor(tod / 60)) + ":" + pad(tod % 60);
+      } else {
+        endEl.value = "";
+      }
+    }
+    setRowMode(row, mode);
   }
 
   function setRow(name, hours, allDay, endHours) {
     const row = dateRow(name);
     const dateEl = row.querySelector(".ddate");
-    const timeEl = row.querySelector(".dtime:not(.end)");
+    const startEl = row.querySelector(".dtime.start");
     const endEl = row.querySelector(".dtime.end");
+    const durEl = row.querySelector(".ddur");
     const box = row.querySelector(".dallbox");
-    if (typeof hours !== "number") {
-      dateEl.value = "";
-      timeEl.value = "";
-      endEl.value = "";
-      box.checked = false;
-      timeEl.disabled = false;
-      endEl.disabled = false;
-      setDayHint(row);
-      return;
-    }
-    const d = new Date(base + hours * H);
-    dateEl.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+    const modeButtons = row.querySelectorAll(".dmode button");
+
+    dateEl.value = "";
+    startEl.value = "";
+    endEl.value = "";
+    durEl.value = "";
     box.checked = !!allDay;
-    timeEl.value = allDay ? "" : pad(d.getHours()) + ":" + pad(d.getMinutes());
-    let endText = "";
-    if (!allDay && typeof endHours === "number" && endHours > hours) {
-      const ed = new Date(base + endHours * H);
-      endText = pad(ed.getHours()) + ":" + pad(ed.getMinutes());
+
+    const hasEnd = !allDay && typeof hours === "number" &&
+      typeof endHours === "number" && endHours > hours;
+    if (typeof hours === "number") {
+      const d = new Date(base + hours * H);
+      dateEl.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+      startEl.value = allDay ? "" : pad(d.getHours()) + ":" + pad(d.getMinutes());
+      if (hasEnd) {
+        const ed = new Date(base + endHours * H);
+        endEl.value = pad(ed.getHours()) + ":" + pad(ed.getMinutes());
+        durEl.value = formatDuration((endHours - hours) * 60);
+      }
     }
-    endEl.value = endText;
-    timeEl.disabled = !!allDay;
+
+    /* 有结束 -> 结束模式；没有 -> 时长模式（值为空） */
+    setRowMode(row, hasEnd ? "end" : "dur");
+    startEl.disabled = !!allDay;
     endEl.disabled = !!allDay;
-    setDayHint(row);
+    durEl.disabled = !!allDay;
+    modeButtons.forEach(b => { b.disabled = !!allDay; });
+    updateRowCalc(row);
   }
 
   function rowValue(name) {
@@ -3768,15 +3886,37 @@
     const start = row.querySelector(".ddate").value;
     if (!start) return null;
     const allDay = row.querySelector(".dallbox").checked;
-    const time = allDay ? "" : row.querySelector(".dtime:not(.end)").value;
-    const endTime = allDay ? "" : row.querySelector(".dtime.end").value;
+    const time = allDay ? "" : row.querySelector(".dtime.start").value;
     if (!time) {
       return { start: start, start_time: null, end_date: null, end_time: null };
     }
+
+    const mode = row.dataset.mode || "end";
+    let endTime = "";
+    if (mode === "end") {
+      endTime = row.querySelector(".dtime.end").value;
+    } else {
+      const mins = parseDuration(row.querySelector(".ddur").value);
+      if (mins != null && mins > 0) {
+        const total = timeToMin(time) + mins;
+        const days = Math.floor(total / 1440);
+        const tod = ((total % 1440) + 1440) % 1440;
+        endTime = pad(Math.floor(tod / 60)) + ":" + pad(tod % 60);
+        if (days) {
+          const d = new Date(start + "T00:00");
+          d.setDate(d.getDate() + days);
+          return {
+            start: start, start_time: time,
+            end_date: d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()),
+            end_time: endTime,
+          };
+        }
+      }
+    }
+
     if (!endTime) {
       return { start: start, start_time: time, end_date: null, end_time: null };  // 单点
     }
-    /* 结束早于/等于开始 -> 次日 */
     let endDate = start;
     if (endTime <= time) {
       const d = new Date(start + "T00:00");
@@ -4150,15 +4290,14 @@
       b.classList.toggle("on", b.dataset.status === detailSaved.status));
     DATE_ROWS.forEach(name => {
       const v = detailSaved.dates[name];
-      const row = dateRow(name);
-      const allDay = !!(v && !v.start_time);
-      row.querySelector(".ddate").value = v ? v.start : "";
-      row.querySelector(".dtime:not(.end)").value = v && v.start_time ? v.start_time : "";
-      row.querySelector(".dtime.end").value = v && v.end_time ? v.end_time : "";
-      row.querySelector(".dallbox").checked = allDay;
-      row.querySelector(".dtime:not(.end)").disabled = allDay;
-      row.querySelector(".dtime.end").disabled = allDay;
-      setDayHint(row);
+      if (!v) { setRow(name, undefined, false, undefined); return; }
+      const startHours = (new Date(v.start + "T" + (v.start_time || "00:00")).getTime() - base) / H;
+      let endHours;
+      if (v.start_time && v.end_time) {
+        const endDate = v.end_date || v.end || v.start;
+        endHours = (new Date(endDate + "T" + v.end_time).getTime() - base) / H;
+      }
+      setRow(name, startHours, !v.start_time, endHours);
     });
     dDir.value = detailSaved.dir || "";
     dSubject.value = detailSaved.subject || "";
@@ -4276,17 +4415,32 @@
   });
   DATE_ROWS.forEach(name => {
     const row = dateRow(name);
-    const startEl = row.querySelector(".dtime:not(.end)");
+    const startEl = row.querySelector(".dtime.start");
     const endEl = row.querySelector(".dtime.end");
+    const durEl = row.querySelector(".ddur");
     row.querySelector(".ddate").addEventListener("change", scheduleSave);
-    startEl.addEventListener("change", () => { setDayHint(row); scheduleSave(); });
-    endEl.addEventListener("change", () => { setDayHint(row); scheduleSave(); });
+    row.querySelectorAll(".dmode button").forEach(btn =>
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        switchRowMode(row, btn.dataset.mode);   // 只换表单，不触发保存
+      }));
+    startEl.addEventListener("change", () => { updateRowCalc(row); scheduleSave(); });
+    endEl.addEventListener("change", () => { updateRowCalc(row); scheduleSave(); });
+    durEl.addEventListener("input", () => updateRowCalc(row));
+    durEl.addEventListener("change", () => {
+      const mins = parseDuration(durEl.value);
+      if (mins != null) durEl.value = formatDuration(mins);
+      updateRowCalc(row);
+      scheduleSave();
+    });
     row.querySelector(".dallbox").addEventListener("change", () => {
       const box = row.querySelector(".dallbox");
       startEl.disabled = box.checked;
       endEl.disabled = box.checked;
-      if (box.checked) { startEl.value = ""; endEl.value = ""; }
-      setDayHint(row);
+      durEl.disabled = box.checked;
+      row.querySelectorAll(".dmode button").forEach(b => { b.disabled = box.checked; });
+      if (box.checked) { startEl.value = ""; endEl.value = ""; durEl.value = ""; }
+      updateRowCalc(row);
       scheduleSave();
     });
   });
