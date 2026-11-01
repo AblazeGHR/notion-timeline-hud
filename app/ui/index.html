@@ -3733,7 +3733,25 @@
     if (!start) return null;
     const allDay = row.querySelector(".dallbox").checked;
     const time = allDay ? "" : row.querySelector(".dtime").value;
-    return { start: start, start_time: time || null };
+    if (!time) return { start: start, start_time: null };   // 只有日期 = 全天
+
+    /* 定时：保留原时长；原来是全天/没有 end 就默认 1 小时 */
+    const key = name === "安排日期" ? "sched" : "due";
+    const endKey = name === "安排日期" ? "endSched" : "endDue";
+    let minutes = 60;
+    if (detailTask && typeof detailTask[key] === "number" &&
+        typeof detailTask[endKey] === "number" && detailTask[endKey] > detailTask[key]) {
+      minutes = Math.max(15, Math.round((detailTask[endKey] - detailTask[key]) * 60));
+    }
+    const startDt = new Date(start + "T" + time);
+    const endDt = new Date(startDt.getTime() + minutes * 60000);
+    const endDate = endDt.getFullYear() + "-" + pad(endDt.getMonth() + 1) + "-" + pad(endDt.getDate());
+    return {
+      start: start,
+      start_time: time,
+      end: endDate,
+      end_time: pad(endDt.getHours()) + ":" + pad(endDt.getMinutes()),
+    };
   }
 
   /* 下拉选项：优先用后端给的，缺失时从现有任务里现凑 */
@@ -4145,15 +4163,34 @@
     renderAllDayRows();
   }
 
+  /* 用后端回传的 task 覆盖本地同 id 项（含 end/end_time 派生字段） */
+  function mergeTaskFromUi(uiTask) {
+    if (!uiTask || !uiTask.id) return null;
+    const t = tasks.find(x => x.id === uiTask.id) || detailTask;
+    if (!t) return null;
+    ["id", "title", "status", "tag", "dir", "subject",
+     "sched", "due", "endSched", "endDue", "allDaySched", "allDayDue"].forEach(k => {
+      if (k in uiTask) t[k] = uiTask[k];
+      else delete t[k];
+    });
+    if (detailTask && detailTask.id === t.id) detailTask = t;   // 数据刷新后可能指向旧对象
+    return t;
+  }
+
+  /* 详情改日期/时间后：卡片、全天行、间隙、计数一起重算，scrollTop 不动 */
+  function rerenderAfterMutation(t) {
+    const st = scroll.scrollTop;
+    refreshChips(t);          // 补/撤 lane 卡，并重建全天行与间隙
+    updateCounts();
+    updateEmptyHint();
+    renderSummary();          // 今天 / 逾期计数也跟着日期走
+    scroll.scrollTop = st;
+  }
+
   function applyDetailResult(uiTask) {
-    const t = detailTask;
+    const t = mergeTaskFromUi(uiTask);
     if (!t) return;
-    ["title", "status", "tag", "dir", "subject", "sched", "due", "allDaySched", "allDayDue"]
-      .forEach(k => {
-        if (k in uiTask) t[k] = uiTask[k];
-        else delete t[k];
-      });
-    refreshChips(t);
+    rerenderAfterMutation(t);
   }
 
   async function saveDetail() {
