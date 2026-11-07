@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import ctypes
 import hashlib
 import json
@@ -22,7 +23,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import wintypes
@@ -39,6 +40,7 @@ import config as app_config  # noqa: E402
 import tray as app_tray  # noqa: E402
 from data import DATA_SOURCE_ID, TRACK_DUE, TRACK_SCHED, load, to_ui  # noqa: E402
 from quickadd import parse as parse_quick_add  # noqa: E402
+from sync_cache import WriteCache  # noqa: E402
 from notion_timeline.api_client import NotionClient  # noqa: E402
 from notion_timeline.cache_reader import read_tasks  # noqa: E402
 from notion_timeline.dates import shift  # noqa: E402
@@ -254,7 +256,7 @@ def refresh_loop(window: webview.Window, initial_digest: str) -> None:
         if seconds <= 0:
             continue
         try:
-            data, source, error = load()
+            data, source, error = _load_merged()
         except Exception as exc:  # noqa: BLE001
             print("后台刷新失败:", exc, flush=True)
             continue
@@ -1026,6 +1028,207 @@ def _read_current_date(client: NotionClient, task_id: str, prop: str) -> DateVal
 # ---------------------------------------------------------------- JS 桥
 
 
+
+# ---------------------------------------------------------------- 乐观写入
+_CACHE = WriteCache(delay=0.5)
+_API_REF: Any = None
+_writer_lock = threading.Lock()
+_writer_started = False
+
+_STATUS_UI = {
+    "未开始": "todo", "进行中": "doing", "已完成": "done",
+    "todo": "todo", "doing": "doing", "done": "done",
+}
+_TRACK_KEYS = {
+    TRACK_SCHED: ("sched", "allDaySched", "endSched"),
+    TRACK_DUE: ("due", "allDayDue", "endDue"),
+}
+
+
+def _today0() -> datetime:
+    return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _hours_of(date: str, clock: str | None) -> float:
+    dt = datetime.fromisoformat(date + "T" + (clock or "00:00"))
+    return round((dt - _today0()).total_seconds() / 3600, 3)
+
+
+def _date_value_of(task: dict, prop: str) -> dict | None:
+    """本地 UI task → Notion date patch 的一侧。"""
+    key, all_key, end_key = _TRACK_KEYS[prop]
+    hours = task.get(key)
+    if not isinstance(hours, (int, float)):
+        return None
+    base = _today0()
+    start = base + timedelta(minutes=round(hours * 60))
+    out: dict[str, Any] = {"start": start.strftime("%Y-%m-%d")}
+    if task.get(all_key):
+        return out
+    out["start_time"] = start.strftime("%H:%M")
+    end = task.get(end_key)
+    if isinstance(end, (int, float)) and end > hours:
+        ed = base + timedelta(minutes=round(end * 60))
+        out["end_date"] = ed.strftime("%Y-%m-%d")
+        out["end_time"] = ed.strftime("%H:%M")
+    return out
+
+
+def _apply_fields_to_task(task: dict, patch: dict) -> dict:
+    """把详情 patch 落到本地 UI task，不改 Notion。"""
+    out = copy.deepcopy(task)
+    title = patch.get("title")
+    if title is not None:
+        out["title"] = str(title).strip()
+    status = patch.get("status")
+    if status is not None:
+        out["status"] = _STATUS_UI.get(str(status), out.get("status", "todo"))
+
+    for name, value in (patch.get("dates") or {}).items():
+        key, all_key, end_key = _TRACK_KEYS.get(name, (None, None, None))
+        if not key:
+            continue
+        if not isinstance(value, dict) or not value.get("start"):
+            out.pop(key, None)
+            out.pop(all_key, None)
+            out.pop(end_key, None)
+            continue
+        start_time = value.get("start_time") or None
+        out[key] = _hours_of(str(value["start"]), start_time)
+        out[all_key] = not start_time
+        end_time = value.get("end_time") or None
+        end_date = value.get("end_date") or value.get("end")
+        if start_time and end_time and end_date:
+            out[end_key] = _hours_of(str(end_date), end_time)
+        else:
+            out.pop(end_key, None)
+
+    if patch.get("properties"):
+        for name, prop in (patch.get("properties") or {}).items():
+            if not isinstance(prop, dict):
+                continue
+            if name == "大方向":
+                out["dir"] = prop.get("value") or ""
+            elif name == "学科":
+                out["subject"] = prop.get("value") or ""
+        out["tag"] = out.get("dir") or out.get("subject") or ""
+    return out
+
+
+def _friendly_error(text: Any) -> str:
+    raw = str(text or "未知错误")
+    if "HTTP 400" in raw:
+        return "数据被 Notion 拒绝（400）"
+    if "HTTP 403" in raw:
+        return "没有修改权限（403）"
+    if "HTTP 429" in raw:
+        return "请求过于频繁（429），请稍后再试"
+    return raw[:200]
+
+
+def _notify_write_failed(task_id: str, last_good: dict, error: str) -> None:
+    api = _API_REF
+    window = getattr(api, "_window", None) if api else None
+    if not window:
+        return
+    payload = json.dumps(
+        {"id": task_id, "task": last_good, "error": _friendly_error(error)},
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
+    try:
+        window.evaluate_js(f"window.__hud && window.__hud.onWriteFailed({payload});")
+    except Exception as exc:  # noqa: BLE001
+        print("回滚通知失败:", exc, flush=True)
+
+
+def _write_task_fields(task_id: str, patch: dict) -> dict:
+    """真正的 Notion 写入（后台线程调用）。"""
+    if not isinstance(patch, dict):
+        return {"ok": False, "error": "patch 必须是对象"}
+
+    title = patch.get("title")
+    if title is not None:
+        title = str(title).strip()
+        if not title:
+            return {"ok": False, "error": "标题不能为空"}
+
+    status = patch.get("status")
+    if status is not None and status not in _STATUS_ALIASES:
+        return {"ok": False, "error": f"不支持的状态：{status}"}
+
+    dates: dict[str, DateValue] = {}
+    for name, value in (patch.get("dates") or {}).items():
+        if name not in (TRACK_SCHED, TRACK_DUE):
+            return {"ok": False, "error": f"不支持的日期属性：{name}"}
+        if not isinstance(value, dict) or not value.get("start"):
+            return {"ok": False, "error": f"「{name}」缺少 start"}
+        end_date = value.get("end_date") or value.get("end")
+        dates[name] = DateValue(
+            start=str(value["start"]),
+            end=str(end_date) if end_date else None,
+            start_time=str(value["start_time"]) if value.get("start_time") else None,
+            end_time=str(value["end_time"]) if value.get("end_time") else None,
+            time_zone=str(value.get("time_zone") or TZ),
+        )
+
+    properties: dict[str, PropertyValue] = {}
+    for name, value in (patch.get("properties") or {}).items():
+        if not isinstance(value, dict) or "type" not in value:
+            return {"ok": False, "error": f"属性「{name}」格式不对"}
+        properties[name] = PropertyValue(str(value["type"]), value.get("value"))
+
+    if title is None and status is None and not dates and not properties:
+        return {"ok": False, "error": "没有要改的字段"}
+
+    try:
+        with NotionClient() as client:
+            if status is not None:
+                properties["状态"] = PropertyValue("status", _resolve_status(client, status))
+            updated = client.update_task(
+                task_id,
+                title=title,
+                dates=dates or None,
+                properties=properties or None,
+            )
+        ui = to_ui([updated])
+        if not ui["tasks"]:
+            return {"ok": False, "error": "保存后任务没有日期"}
+        return {"ok": True, "task": ui["tasks"][0]}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def _writer_loop() -> None:
+    while True:
+        time.sleep(0.1)
+        for task_id in _CACHE.due():
+            job = _CACHE.begin(task_id)
+            if not job:
+                continue
+            res = _write_task_fields(task_id, job["patch"])
+            if res.get("ok") and res.get("task"):
+                _CACHE.succeed(task_id, job["gen"], res["task"])
+            else:
+                last_good = _CACHE.fail(task_id, job["gen"])
+                if last_good is not None:
+                    _notify_write_failed(task_id, last_good, res.get("error") or "未知错误")
+
+
+def _ensure_writer() -> None:
+    global _writer_started
+    with _writer_lock:
+        if _writer_started:
+            return
+        _writer_started = True
+        threading.Thread(target=_writer_loop, name="timeline-writer", daemon=True).start()
+
+
+def _load_merged() -> tuple[dict, str, str | None]:
+    data, source, error = load()
+    data["tasks"] = _CACHE.ingest(data.get("tasks") or [])
+    return data, source, error
+
+
 class Api:
     def __init__(self) -> None:
         self._window: webview.Window | None = None
@@ -1153,7 +1356,7 @@ class Api:
         return {"ok": True, "message": message, "enabled": actual, "config": updated}
 
     def reload_data(self) -> dict:
-        data, source, error = load()
+        data, source, error = _load_merged()
         return {"data": data, "source": source, "error": error}
 
     def open_task(self, task_id: str) -> dict:
@@ -1191,6 +1394,7 @@ class Api:
             ui = to_ui([task])
             if not ui["tasks"]:
                 return {"ok": False, "error": "创建成功但没有日期，已进待安排"}
+            _CACHE.ingest([ui["tasks"][0]])
             return {"ok": True, "task": ui["tasks"][0]}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
@@ -1203,6 +1407,10 @@ class Api:
             with NotionClient() as client:
                 real = _resolve_status(client, name)
                 client.update_task(task_id, properties={"状态": PropertyValue("status", real)})
+            cached = _CACHE.get(task_id)
+            if cached:
+                cached["status"] = nxt
+                _CACHE.set_local(task_id, cached)
             return {"ok": True, "status": nxt}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
@@ -1243,6 +1451,7 @@ class Api:
             ui = to_ui([task])
             if not ui["tasks"]:
                 return {"ok": False, "error": "创建成功但没有日期，已进待安排"}
+            _CACHE.ingest([ui["tasks"][0]])
             return {"ok": True, "task": ui["tasks"][0], "date": value.to_dict()}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
@@ -1250,7 +1459,7 @@ class Api:
     def resize_task(
         self, task_id: str, prop: str, start: dict | None, end: dict | None
     ) -> dict:
-        """拖卡片上下沿：改起止时间（prop 只能是 安排日期 / 截止日期）。"""
+        """上下沿/行拖入：本地先落，后台合并写。"""
         if prop not in (TRACK_SCHED, TRACK_DUE):
             return {"ok": False, "error": f"不支持的日期属性：{prop}"}
         try:
@@ -1267,25 +1476,28 @@ class Api:
             if end_dt <= start_dt:
                 return {"ok": False, "error": "结束时间必须晚于开始时间"}
 
-        value = DateValue(
-            start=start_point[0],
-            end=end_point[0] if end_point else None,
-            start_time=start_point[1],
-            end_time=end_point[1] if end_point else None,
-            time_zone=TZ,
-        )
-        try:
-            with NotionClient() as client:
-                updated = client.update_task(task_id, dates={prop: value})
-            ui = to_ui([updated])
-            if not ui["tasks"]:
-                return {"ok": False, "error": "改时长后任务没有日期"}
-            return {"ok": True, "task": ui["tasks"][0], "date": value.to_dict()}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
+        task = _CACHE.get(task_id)
+        if not task:
+            return {"ok": False, "error": "任务缓存未就绪，请刷新后重试"}
+        key, all_key, end_key = _TRACK_KEYS[prop]
+        local = copy.deepcopy(task)
+        local[key] = _hours_of(start_point[0], start_point[1])
+        local[all_key] = start_point[1] is None
+        if end_point is not None:
+            local[end_key] = _hours_of(end_point[0], end_point[1])
+        else:
+            local.pop(end_key, None)
+
+        value: dict[str, Any] = {"start": start_point[0], "start_time": start_point[1]}
+        if end_point is not None:
+            value["end_date"] = end_point[0]
+            value["end_time"] = end_point[1]
+        _CACHE.mutate(task_id, local, {"dates": {prop: value}})
+        _ensure_writer()
+        return {"ok": True, "optimistic": True, "task": local, "date": value}
 
     def set_all_day(self, task_id: str, prop: str, date: str) -> dict:
-        """把某一侧的日期清成「只有日期」：不写 start_time / end_time / end。"""
+        """把某一侧清成纯日期（无时间无 end），本地先落。"""
         if prop not in (TRACK_SCHED, TRACK_DUE):
             return {"ok": False, "error": f"不支持的日期属性：{prop}"}
         if not isinstance(date, str):
@@ -1296,16 +1508,18 @@ class Api:
         except ValueError:
             return {"ok": False, "error": f"日期格式应为 YYYY-MM-DD：{date}"}
 
-        value = DateValue(start=day)      # 无时间、无 end，其余字段保持 None
-        try:
-            with NotionClient() as client:
-                updated = client.update_task(task_id, dates={prop: value})
-            ui = to_ui([updated])
-            if not ui["tasks"]:
-                return {"ok": False, "error": "改为全天失败：任务没有日期"}
-            return {"ok": True, "task": ui["tasks"][0], "date": value.to_dict()}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
+        task = _CACHE.get(task_id)
+        if not task:
+            return {"ok": False, "error": "任务缓存未就绪，请刷新后重试"}
+        key, all_key, end_key = _TRACK_KEYS[prop]
+        local = copy.deepcopy(task)
+        local[key] = _hours_of(day, None)
+        local[all_key] = True
+        local.pop(end_key, None)
+        value = {"start": day}
+        _CACHE.mutate(task_id, local, {"dates": {prop: value}})
+        _ensure_writer()
+        return {"ok": True, "optimistic": True, "task": local, "date": value}
 
     def update_block_text(self, block_id: str, text: str) -> dict:
         """改一个文本块的文字（rich_text 会合并成单 run）。"""
@@ -1380,71 +1594,47 @@ class Api:
         return {"ok": True, "started": True}
 
     def update_task_fields(self, task_id: str, patch: dict | None = None) -> dict:
-        """详情弹窗的自动保存：只提交 patch 里出现的字段。"""
+        """详情自动保存：先落本地，后台按 500ms 合并写。"""
         if not isinstance(patch, dict):
             return {"ok": False, "error": "patch 必须是对象"}
 
         title = patch.get("title")
-        if title is not None:
-            title = str(title).strip()
-            if not title:
-                return {"ok": False, "error": "标题不能为空"}
-
+        if title is not None and not str(title).strip():
+            return {"ok": False, "error": "标题不能为空"}
         status = patch.get("status")
         if status is not None and status not in _STATUS_ALIASES:
             return {"ok": False, "error": f"不支持的状态：{status}"}
-
-        dates: dict[str, DateValue] = {}
         for name, value in (patch.get("dates") or {}).items():
             if name not in (TRACK_SCHED, TRACK_DUE):
                 return {"ok": False, "error": f"不支持的日期属性：{name}"}
             if not isinstance(value, dict) or not value.get("start"):
                 return {"ok": False, "error": f"「{name}」缺少 start"}
-            end_date = value.get("end_date") or value.get("end")
-            dates[name] = DateValue(
-                start=str(value["start"]),
-                end=str(end_date) if end_date else None,
-                start_time=str(value["start_time"]) if value.get("start_time") else None,
-                end_time=str(value["end_time"]) if value.get("end_time") else None,
-                time_zone=str(value.get("time_zone") or TZ),
-            )
-
-        properties: dict[str, PropertyValue] = {}
         for name, value in (patch.get("properties") or {}).items():
             if not isinstance(value, dict) or "type" not in value:
                 return {"ok": False, "error": f"属性「{name}」格式不对"}
-            properties[name] = PropertyValue(str(value["type"]), value.get("value"))
-
-        if title is None and status is None and not dates and not properties:
+        if (title is None and status is None and not (patch.get("dates") or {})
+                and not (patch.get("properties") or {})):
             return {"ok": False, "error": "没有要改的字段"}
 
-        try:
-            with NotionClient() as client:
-                if status is not None:
-                    properties["状态"] = PropertyValue("status", _resolve_status(client, status))
-                updated = client.update_task(
-                    task_id,
-                    title=title,
-                    dates=dates or None,
-                    properties=properties or None,
-                )
-            ui = to_ui([updated])
-            if not ui["tasks"]:
-                return {"ok": False, "error": "保存后任务没有日期"}
-            return {"ok": True, "task": ui["tasks"][0]}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
+        task = _CACHE.get(task_id)
+        if not task:
+            return {"ok": False, "error": "任务缓存未就绪，请刷新后重试"}
+        local = _apply_fields_to_task(task, patch)
+        _CACHE.mutate(task_id, local, patch)
+        _ensure_writer()
+        return {"ok": True, "optimistic": True, "task": local}
 
     def delete_task(self, task_id: str) -> dict:
         try:
             with NotionClient() as client:
                 client.delete_task(task_id)
+            _CACHE.forget(task_id)
             return {"ok": True}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
     def reschedule(self, task_id: str, prop: str, delta_minutes: int) -> dict:
-        """拖拽改期：读当前值 → shift → 写回，返回 UI 形状的新任务。"""
+        """拖拽改期：本地平移后进合并队列，不再等 API。"""
         try:
             delta = int(round(float(delta_minutes)))
         except (TypeError, ValueError):
@@ -1453,19 +1643,23 @@ class Api:
             return {"ok": False, "error": f"不支持的日期属性：{prop}"}
         if delta == 0:
             return {"ok": False, "error": "没有移动"}
-        try:
-            with NotionClient() as client:
-                current = _read_current_date(client, task_id, prop)
-                if current is None:
-                    return {"ok": False, "error": f"任务没有「{prop}」"}
-                moved = shift(current, delta)
-                updated = client.update_task(task_id, dates={prop: moved})
-            ui = to_ui([updated])
-            if not ui["tasks"]:
-                return {"ok": False, "error": "改期后任务没有日期"}
-            return {"ok": True, "task": ui["tasks"][0], "prop": prop, "date": moved.to_dict()}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)}
+        task = _CACHE.get(task_id)
+        if not task:
+            return {"ok": False, "error": "任务缓存未就绪，请刷新后重试"}
+        key, _all_key, end_key = _TRACK_KEYS[prop]
+        if not isinstance(task.get(key), (int, float)):
+            return {"ok": False, "error": f"任务没有「{prop}」"}
+        local = copy.deepcopy(task)
+        local[key] = round(local[key] + delta / 60, 3)
+        end = local.get(end_key)
+        if isinstance(end, (int, float)):
+            local[end_key] = round(end + delta / 60, 3)
+        value = _date_value_of(local, prop)
+        if not value:
+            return {"ok": False, "error": "改期后任务没有日期"}
+        _CACHE.mutate(task_id, local, {"dates": {prop: value}})
+        _ensure_writer()
+        return {"ok": True, "optimistic": True, "task": local, "prop": prop, "date": value}
 
 
 # ---------------------------------------------------------------- 入口
@@ -1487,7 +1681,7 @@ def screen_size() -> tuple[int, int]:
 
 def render_html() -> str:
     template = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
-    data, source, error = load()
+    data, source, error = _load_merged()
     print(f"数据来源: {source} | 任务 {len(data['tasks'])} 条 | 待安排 {len(data['undated'])} 条", flush=True)
     if error:
         print("回落原因:", error[:200], flush=True)
@@ -1556,6 +1750,8 @@ def main() -> None:
         hidden=args.hidden,
     )
     api._window = window
+    global _API_REF
+    _API_REF = api
     start_activation_server(window)
 
     # ---- 系统托盘（pystray 缺失时自动跳过） ----

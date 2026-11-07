@@ -2097,27 +2097,35 @@
       }
       const api = bridge();
       if (!api) { restore(); return; }
-      el.style.opacity = ".7";
-      const res = await api.resize_task(
-        t.id, TRACK_PROP[key], pointOf(submitStart),
-        submitEnd === null ? null : pointOf(submitEnd));
-      el.style.opacity = "";
-      if (res && res.ok) {
-        t[key] = submitStart / 60;
-        t[END_KEY[key]] = submitEnd === null ? null : submitEnd / 60;
-        if (allDay) {
-          t[ALL_DAY_KEY[key]] = false;
-          el.classList.remove("allday");
-        }
-        item.y = yOf(base + t[key] * H);
-        const timeSpan = el.querySelector(".row2 span");
-        if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
-        applyChipSpanHeight(item);
-      } else {
-        restore();
-        toast("调整失败：" + ((res && res.error) || "未知错误"));
+      const before = { start: t[key], end: t[END_KEY[key]], y: item.y };
+      t[key] = submitStart / 60;
+      t[END_KEY[key]] = submitEnd === null ? null : submitEnd / 60;
+      if (allDay) {
+        t[ALL_DAY_KEY[key]] = false;
+        el.classList.remove("allday");
       }
-      layoutLane(key);
+      item.y = yOf(base + t[key] * H);
+      el.style.top = item.y + "px";
+      applyChipSpanHeight(item);
+      const timeSpan = el.querySelector(".row2 span");
+      if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+
+      const rollback = msg => {
+        t[key] = before.start;
+        if (typeof before.end === "number") t[END_KEY[key]] = before.end;
+        else delete t[END_KEY[key]];
+        item.y = before.y;
+        el.style.top = before.y + "px";
+        applyChipSpanHeight(item);
+        if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+        toast("调整失败：" + (msg || "未知错误"));
+      };
+      Promise.resolve(api.resize_task(
+        t.id, TRACK_PROP[key], pointOf(submitStart),
+        submitEnd === null ? null : pointOf(submitEnd)
+      )).then(res => {
+        if (!res || res.ok === false) rollback((res && res.error) || "未知错误");
+      }).catch(err => rollback(String(err)));
     };
 
     window.addEventListener("pointermove", onMove);
@@ -2393,63 +2401,52 @@
         return;
       }
 
-      el.style.opacity = ".7";
-
       if (allDay) {
-        /* 全天 → 定时：start = 松手点（15 分钟吸附），end = start + 高度折算时长 */
+        /* 全天卡（当前没有入口）：保持旧路径 */
         const startMin = snapMinute(yToMinute(pointerY));
         const endMin = startMin + allDayDur;
-        const res = await api.resize_task(
-          t.id, TRACK_PROP[key], pointOfMinute(startMin), pointOfMinute(endMin));
-        el.style.opacity = "";
-        if (res && res.ok) {
-          t[key] = (startMin - base / 60000) / 60;
-          t[END_KEY[key]] = (endMin - base / 60000) / 60;
-          t[ALL_DAY_KEY[key]] = false;
-          el.classList.remove("allday");
-          item.y = yOf(base + t[key] * H);
-          const timeSpan = el.querySelector(".row2 span");
-          if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
-          applyChipSpanHeight(item);
-        } else {
-          restore();
-          toast("改期失败：" + ((res && res.error) || "未知错误"));
-        }
-        layoutLane(key);
+        el.style.opacity = ".7";
+        Promise.resolve(api.resize_task(
+          t.id, TRACK_PROP[key], pointOfMinute(startMin), pointOfMinute(endMin)
+        )).then(res => {
+          el.style.opacity = "";
+          if (res && res.ok) refreshChips(t);
+          else { restore(); toast("改期失败：" + ((res && res.error) || "未知错误")); }
+        }).catch(err => { el.style.opacity = ""; restore(); toast("改期失败：" + err); });
         return;
       }
 
       const minutes = snapMs(tsAtPoint(pointerY) - grabTs, false) / 60000;
       if (!minutes) {
-        el.style.opacity = "";
         restore();
         return;
       }
-      const res = await api.reschedule(t.id, TRACK_PROP[key], minutes);
-      el.style.opacity = "";
-      if (res && res.ok && res.task) {
-        const hours = res.task[key];
-        if (typeof hours === "number") {
-          t[key] = hours;
-          t[ALL_DAY_KEY[key]] = !!res.task[ALL_DAY_KEY[key]];
-          // 整卡平移：结束时刻跟着走，保持时长
-          if (typeof res.task[END_KEY[key]] === "number") {
-            t[END_KEY[key]] = res.task[END_KEY[key]];
-          }
-          item.y = yOf(base + hours * H);
-          applyChipSpanHeight(item);
-          const timeSpan = el.querySelector(".row2 span");
-          if (timeSpan) {
-            timeSpan.textContent = chipTimeText(t, key);
-          }
-          const late = key === "due" && base + hours * H < nowTs && t.status !== "done";
-          el.classList.toggle("overdue", late);
-        }
-      } else {
-        restore();
-        toast("改期失败：" + ((res && res.error) || "未知错误"));
+      const before = { start: t[key], end: t[END_KEY[key]], y: item.y };
+      t[key] = Math.round((t[key] + minutes / 60) * 1000) / 1000;
+      if (typeof t[END_KEY[key]] === "number") {
+        t[END_KEY[key]] = Math.round((t[END_KEY[key]] + minutes / 60) * 1000) / 1000;
       }
-      layoutLane(key);
+      item.y = yOf(base + t[key] * H);
+      el.style.top = item.y + "px";
+      applyChipSpanHeight(item);
+      const timeSpan = el.querySelector(".row2 span");
+      if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+      const late = key === "due" && base + t[key] * H < nowTs && t.status !== "done";
+      el.classList.toggle("overdue", late);
+
+      const rollback = msg => {
+        t[key] = before.start;
+        if (typeof before.end === "number") t[END_KEY[key]] = before.end;
+        else delete t[END_KEY[key]];
+        item.y = before.y;
+        el.style.top = before.y + "px";
+        applyChipSpanHeight(item);
+        if (timeSpan) timeSpan.textContent = chipTimeText(t, key);
+        toast("改期失败：" + (msg || "未知错误"));
+      };
+      Promise.resolve(api.reschedule(t.id, TRACK_PROP[key], minutes)).then(res => {
+        if (!res || res.ok === false) rollback((res && res.error) || "未知错误");
+      }).catch(err => rollback(String(err)));
     };
 
     window.addEventListener("keydown", onKey, true);
@@ -4367,6 +4364,41 @@
     rerenderAfterMutation(t);
   }
 
+  function hoursFromDateTime(date, time) {
+    const d = new Date(date + "T" + (time || "00:00"));
+    return (d.getTime() - base) / H;
+  }
+
+  /* 详情表单 → 本地 UI task（不碰 Notion） */
+  function localFromDetail(t, next) {
+    const out = Object.assign({}, t);
+    out.title = next.title;
+    out.status = next.status;
+    out.dir = next.dir;
+    out.subject = next.subject;
+    out.tag = next.dir || next.subject || "";
+    DATE_ROWS.forEach(name => {
+      const key = name === "安排日期" ? "sched" : "due";
+      const allKey = name === "安排日期" ? "allDaySched" : "allDayDue";
+      const endKey = name === "安排日期" ? "endSched" : "endDue";
+      const v = next.dates[name];
+      if (!v) {
+        delete out[key];
+        delete out[allKey];
+        delete out[endKey];
+        return;
+      }
+      out[key] = hoursFromDateTime(v.start, v.start_time);
+      out[allKey] = !v.start_time;
+      if (v.start_time && v.end_time) {
+        out[endKey] = hoursFromDateTime(v.end_date || v.start, v.end_time);
+      } else {
+        delete out[endKey];
+      }
+    });
+    return out;
+  }
+
   async function saveDetail() {
     if (!detailTask || !detailSaved || detailBusy) return;
     const next = readDetail();
@@ -4387,16 +4419,31 @@
 
     const api = bridge();
     if (!api) return;
-    detailBusy = true;
-    const res = await api.update_task_fields(detailTask.id, patch);
-    detailBusy = false;
-    if (res && res.ok && res.task) {
-      detailSaved = next;
-      applyDetailResult(res.task);
-    } else {
+
+    /* 先本地生效，再把合并写交给后台；失败由 onWriteFailed / 这里的 ok=false 回滚 */
+    const before = Object.assign({}, detailTask);
+    const savedBefore = detailSaved;
+    const local = localFromDetail(detailTask, next);
+    const task = mergeTaskFromUi(local);
+    if (!task) return;
+    detailSaved = next;
+    rerenderAfterMutation(task);
+
+    Promise.resolve(api.update_task_fields(task.id, patch)).then(res => {
+      if (!res || res.ok === false) {
+        mergeTaskFromUi(before);
+        rerenderAfterMutation(task);
+        detailSaved = savedBefore;
+        revertDetail();
+        toast("保存失败：" + ((res && res.error) || "未知错误"));
+      }
+    }).catch(err => {
+      mergeTaskFromUi(before);
+      rerenderAfterMutation(task);
+      detailSaved = savedBefore;
       revertDetail();
-      toast("保存失败：" + ((res && res.error) || "未知错误"));
-    }
+      toast("保存失败：" + err);
+    });
   }
 
   function scheduleSave() {
@@ -4424,7 +4471,28 @@
         e.stopPropagation();
         switchRowMode(row, btn.dataset.mode);   // 只换表单，不触发保存
       }));
-    startEl.addEventListener("change", () => { updateRowCalc(row); scheduleSave(); });
+    startEl.addEventListener("focus", () => {
+      row.dataset.prevStart = startEl.value;
+      row.dataset.prevEnd = endEl.value;
+    });
+    startEl.addEventListener("change", () => {
+      /* 改开始时间时保持原时长，避免 14:00 配旧的 13:00 变成 23 小时 */
+      if (row.dataset.mode === "end" && row.dataset.prevStart && row.dataset.prevEnd) {
+        const a = timeToMin(row.dataset.prevStart);
+        const b = timeToMin(row.dataset.prevEnd);
+        const ns = timeToMin(startEl.value);
+        if (a != null && b != null && ns != null) {
+          let dur = b - a;
+          if (dur <= 0) dur += 1440;
+          const end = ((ns + dur) % 1440 + 1440) % 1440;
+          endEl.value = pad(Math.floor(end / 60)) + ":" + pad(end % 60);
+        }
+      }
+      row.dataset.prevStart = startEl.value;
+      row.dataset.prevEnd = endEl.value;
+      updateRowCalc(row);
+      scheduleSave();
+    });
     endEl.addEventListener("change", () => { updateRowCalc(row); scheduleSave(); });
     durEl.addEventListener("input", () => updateRowCalc(row));
     durEl.addEventListener("change", () => {
@@ -4525,6 +4593,15 @@
       renderAllDayRows();
     },
     setStatus(info) { applySyncStatus(info); return true; },
+
+    /* 后台写失败：用 last_good 恢复本地与 DOM，再提示 */
+    onWriteFailed(info) {
+      if (!info || !info.id) return false;
+      const task = info.task ? mergeTaskFromUi(info.task) : null;
+      if (task) rerenderAfterMutation(task);
+      toast("保存失败，已撤销：" + (info.error || "未知错误"));
+      return true;
+    },
 
     /* 后台刷新推过来的整包数据：保持视口中心时刻与当前轨道 */
     setData(data) {
