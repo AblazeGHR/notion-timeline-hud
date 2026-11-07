@@ -267,6 +267,18 @@
     pointer-events: auto;
   }
   .allitem:hover { background: rgba(255,255,255,.1); color: var(--text); }
+  .allitem.sel {
+    border-color: rgba(124,140,255,.65);
+    background: rgba(124,140,255,.16);
+    color: var(--text);
+  }
+  .allday-row .ainput {
+    flex: none; width: 110px; height: 18px; padding: 0 6px;
+    border: 1px dashed rgba(124,140,255,.7); border-radius: 6px;
+    background: rgba(124,140,255,.08); color: var(--text);
+    font-family: inherit; font-size: 10.5px; outline: 0;
+  }
+  .allday-row .ainput::placeholder { color: var(--faint); }
   .allitem .dot { margin-top: 0; }
   .allitem .nm { overflow: hidden; text-overflow: ellipsis; }
   .allitem.done { opacity: .55; }
@@ -1300,12 +1312,14 @@
   const mOk = document.getElementById("mOk");
   const mCancel = document.getElementById("mCancel");
   let modalResolve = null;
+  let modalInfo = null;          // { kind, id }：区分删除确认，Delete 键可直接确认
 
   function askConfirm(opts) {
     const cfg = typeof opts === "string" ? { text: opts } : (opts || {});
     return new Promise(resolve => {
       if (modalResolve) { modalResolve(false); modalResolve = null; }
       modalResolve = resolve;
+      modalInfo = { kind: cfg.kind || "", id: cfg.id || "" };
       mTitle.textContent = cfg.title || "确认操作";
       mText.textContent = cfg.text || "";
       mOk.textContent = cfg.okText || "确定";
@@ -1323,6 +1337,7 @@
     syncUiState(true);
     const resolve = modalResolve;
     modalResolve = null;
+    modalInfo = null;
     if (resolve) resolve(result);
   }
 
@@ -1334,9 +1349,14 @@
   });
   window.addEventListener("keydown", e => {
     if (!modalEl.classList.contains("open")) return;
+    e.__hudModal = true;
     e.stopPropagation();
     if (e.key === "Escape") { e.preventDefault(); closeModal(false); }
     else if (e.key === "Enter") { e.preventDefault(); closeModal(true); }
+    else if (e.key === "Delete" && modalInfo && modalInfo.kind === "delete") {
+      e.preventDefault();
+      closeModal(true);                 // 删除确认框里再按 Delete = 直接确认
+    }
   }, true);
 
   const NOW = new Date();
@@ -1594,6 +1614,20 @@
      每个「有全天任务」的日期在 canvas 内该日 y 处画一条 28px 行；
      z-index 高于 lane、低于 now 徽标。日期没有全天任务就不渲染。 */
   let allDayRows = [];          // 按 y 升序：{ el, y, day, key, list }
+  let selectedAllDay = null;    // { id, key }：全天行里最后点中的任务
+
+  function selectAllDayItem(t, key, el) {
+    selectedAllDay = { id: t.id, key: key };
+    selIndex = -1;
+    document.querySelectorAll(".chip.sel").forEach(x => x.classList.remove("sel"));
+    document.querySelectorAll(".allitem.sel").forEach(x => x.classList.remove("sel"));
+    if (el) el.classList.add("sel");
+  }
+
+  function clearAllDaySelection() {
+    selectedAllDay = null;
+    document.querySelectorAll(".allitem.sel").forEach(x => x.classList.remove("sel"));
+  }
 
   function dayStartOf(ts) {
     const d = new Date(ts);
@@ -1634,6 +1668,11 @@
       el.style.top = (yOf(day) - GAP_H) + "px";   // 行占的是 00:00 前的间隙
 
       el.addEventListener("contextmenu", e => e.preventDefault());   // 间隙里不弹系统菜单
+      el.addEventListener("click", e => {
+        if (suppressClick) { suppressClick = false; return; }        // 刚拖完，不当作点击
+        if (e.target.closest(".allitem, .allmore, .ainput")) return;
+        openAllDayInput(el, day, key);
+      });
       const label = document.createElement("span");
       label.className = "adate";
       const d = new Date(day);
@@ -1659,6 +1698,7 @@
         item.addEventListener("click", e => {
           e.stopPropagation();
           if (Date.now() - (item._dragEndedAt || 0) < 300) return;   // 刚拖过，不当点击
+          selectAllDayItem(t, key, item);
           openDetail(t, key, item);
         });
         item.addEventListener("contextmenu", e => {
@@ -1707,6 +1747,12 @@
     });
     if (gapsChanged) refreshGapLayout();
     updatePinnedRows();
+    if (selectedAllDay) {
+      const sel = document.querySelector(
+        '.allitem[data-id="' + CSS.escape(selectedAllDay.id) + '"]');
+      if (sel) sel.classList.add("sel");
+      else selectedAllDay = null;
+    }
   }
 
   /* 间隙数量变了：canvas 高度、日线、刻度、now 线都要重算 */
@@ -2174,6 +2220,7 @@
   let uiIdleSince = Date.now();
   function uiBusyNow() {
     return !!(dragActive || resizing ||
+      document.querySelector(".phcard, .allday-row .ainput") ||
       detail.classList.contains("open") || modalEl.classList.contains("open"));
   }
   function syncUiState(force) {
@@ -2518,8 +2565,7 @@
     el.addEventListener("click", e => {
       e.stopPropagation();
       if (Date.now() - (el._dragEndedAt || 0) < 300) return;  // 拖拽刚结束，不当点击
-      document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
-      el.classList.add("sel");
+      selectChipEl(el);
       openDetail(t, key, el);
     });
     el.addEventListener("dblclick", () => {
@@ -3369,6 +3415,135 @@
     if (phCard) { phCard.remove(); phCard = null; }
   }
 
+  /* ---------- 创建乐观化：先落本地，API 只负责换成真 id / 失败回滚 ---------- */
+  let tmpSeq = 0;
+  const pendingCreateIds = new Set();
+
+  function tmpTaskId() {
+    tmpSeq += 1;
+    return "tmp-" + tmpSeq;
+  }
+
+  function insertLocalTask(task, key) {
+    tasks.push(task);
+    if (task[ALL_DAY_KEY[key]]) {
+      const st = scroll.scrollTop;
+      renderAllDayRows();
+      scroll.scrollTop = st;
+    } else {
+      const item = mountChip(task, key);
+      if (item) {
+        items[key].push(item);
+        layoutLane(key);
+        revealChip(item.el);
+      }
+    }
+    updateCounts();
+    updateEmptyHint();
+    renderSummary();
+    markIntroSeen();
+    return task;
+  }
+
+  /* 服务端 id 回来：只改 id，不重建节点 */
+  function rebindTaskId(oldId, newId) {
+    const t = tasks.find(x => x.id === oldId);
+    if (!t) return null;
+    t.id = newId;
+    if (selectedAllDay && selectedAllDay.id === oldId) selectedAllDay.id = newId;
+    document.querySelectorAll(
+      '.chip[data-id="' + CSS.escape(oldId) + '"], .allitem[data-id="' + CSS.escape(oldId) + '"]'
+    ).forEach(el => { el.dataset.id = newId; });
+    return t;
+  }
+
+  function removeLocalTask(id) {
+    window.__hud.remove(id);
+  }
+
+  function createOptimistic(prop, key, title, startMin, endMin, allDayDay) {
+    const id = tmpTaskId();
+    const isAllDay = typeof allDayDay === "number";
+    const task = { id: id, title: title, status: "todo", tag: "", dir: "", subject: "" };
+    if (isAllDay) {
+      task[key] = (allDayDay - base) / H;
+      task[ALL_DAY_KEY[key]] = true;
+    } else {
+      task[key] = (startMin * 60000 - base) / H;   // 相对今天 0 点的小时数
+      task[ALL_DAY_KEY[key]] = false;
+      if (typeof endMin === "number") task[END_KEY[key]] = (endMin * 60000 - base) / H;
+    }
+    pendingCreateIds.add(id);
+    insertLocalTask(task, key);
+
+    const api = bridge();
+    if (!api || !api.create_at) {
+      pendingCreateIds.delete(id);
+      return task;                       // 预览模式：本地留着，不报错
+    }
+    const start = isAllDay
+      ? { date: isoDateOf(allDayDay), time: null }
+      : pointOfMinute(startMin);
+    const end = (!isAllDay && typeof endMin === "number") ? pointOfMinute(endMin) : null;
+
+    Promise.resolve(api.create_at(prop, title, start, end)).then(res => {
+      pendingCreateIds.delete(id);
+      if (res && res.ok && res.task && res.task.id) {
+        const alive = tasks.some(x => x.id === id);
+        rebindTaskId(id, res.task.id);
+        if (!alive && api.delete_task) {
+          // 创建返回前已被删掉：把刚建出的服务端记录也清掉，避免幽灵任务
+          Promise.resolve(api.delete_task(res.task.id)).catch(() => {});
+        }
+      } else if (tasks.some(x => x.id === id)) {
+        removeLocalTask(id);
+        toast("创建失败：" + ((res && res.error) || "未知错误"));
+      }
+    }).catch(err => {
+      pendingCreateIds.delete(id);
+      if (tasks.some(x => x.id === id)) {
+        removeLocalTask(id);
+        toast("创建失败：" + err);
+      }
+    });
+    return task;
+  }
+
+  /* 全天行空白处：就地输入，回车走同一条乐观创建路径 */
+  function openAllDayInput(rowEl, day, key) {
+    document.querySelectorAll(".allday-row .ainput").forEach(el => el.remove());
+    const input = document.createElement("input");
+    input.className = "ainput";
+    input.placeholder = "新任务标题";
+    input.maxLength = 200;
+    const box = rowEl.querySelector(".aitems");
+    box.insertBefore(input, box.firstChild);
+    requestAnimationFrame(() => input.focus());
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      input.remove();
+    };
+    input.addEventListener("keydown", ev => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        const title = input.value.trim();
+        if (!title) { finish(); return; }
+        finish();
+        createOptimistic(TRACK_PROP[key], key, title, 0, null, day);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        finish();
+      }
+    });
+    input.addEventListener("blur", () => { if (!input.value.trim()) finish(); });
+    input.addEventListener("pointerdown", ev => ev.stopPropagation());
+    input.addEventListener("click", ev => ev.stopPropagation());
+  }
+
   function openPlaceholder(prop, key, startMin, endMin) {
     closePlaceholder();
     const el = document.createElement("div");
@@ -3415,32 +3590,13 @@
       done = true;
       closePlaceholder();
     };
-    const commit = async () => {
+    const commit = () => {
       if (done) return;
       const title = input.value.trim();
       if (!title) { cancel(); return; }
-      const api = bridge();
       done = true;
-      if (!api) { closePlaceholder(); return; }
-      el.style.opacity = ".6";
-      const res = await api.create_at(
-        prop, title, pointOfMinute(startMin), endMin ? pointOfMinute(endMin) : null);
-      if (res && res.ok && res.task) {
-        closePlaceholder();
-        const item = mountChip(res.task, key);
-        if (item) {
-          items[key].push(item);
-          layoutLane(key);
-          updateCounts();
-          revealChip(item.el);
-          markIntroSeen();
-        }
-      } else {
-        done = false;
-        el.style.opacity = "";
-        toast("创建失败：" + ((res && res.error) || "未知错误"));
-        input.focus();
-      }
+      closePlaceholder();                 // 先撤占位，卡片同步插入
+      createOptimistic(prop, key, title, startMin, endMin);
     };
 
     input.addEventListener("keydown", ev => {
@@ -3454,6 +3610,9 @@
 
   /* 新建后的反馈：滚到可见，并短暂选中 */
   function revealChip(el) {
+    clearAllDaySelection();
+    document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
+    selIndex = laneItems().findIndex(it => it.el === el);
     const rect = el.getBoundingClientRect();
     const box = scroll.getBoundingClientRect();
     if (rect.top < box.top + 40 || rect.bottom > box.bottom - 40) {
@@ -3650,6 +3809,7 @@
     const list = laneItems();
     if (!list.length) return null;
     selIndex = Math.max(0, Math.min(list.length - 1, index));
+    clearAllDaySelection();
     document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
     const item = list[selIndex];
     item.el.classList.add("sel");
@@ -3659,6 +3819,15 @@
       scroll.scrollTop += (rect.top - (box.top + box.height / 2)) * canvasYRatio();
     }
     return item;
+  }
+
+  function selectChipEl(el) {
+    const list = laneItems();
+    const idx = list.findIndex(it => it.el === el);
+    selIndex = idx >= 0 ? idx : -1;
+    clearAllDaySelection();
+    document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
+    el.classList.add("sel");
   }
 
   function selectedItem() {
@@ -3671,32 +3840,83 @@
     openDetail(item.t, timelineEl.dataset.track, item.el);
   }
 
+  let lastDelete = { id: null, at: 0 };
+  const deletingIds = new Set();
+
+  function restoreLocalTask(t) {
+    if (!t) return;
+    if (!tasks.some(x => x.id === t.id)) tasks.push(t);
+    refreshChips(t);
+    updateCounts();
+    updateEmptyHint();
+    renderSummary();
+  }
+
+  function performDelete(t) {
+    if (!t || deletingIds.has(t.id)) return;
+    if (pendingCreateIds.has(t.id)) {        // 还在等服务端 id：只撤本地，等回包再清理服务端
+      pendingCreateIds.delete(t.id);
+      window.__hud.remove(t.id);
+      return;
+    }
+    const snapshot = JSON.parse(JSON.stringify(t));
+    const id = t.id;
+    deletingIds.add(id);
+    lastDelete = { id: null, at: 0 };
+    window.__hud.remove(id);
+    const left = laneItems().length;
+    if (selIndex >= left) selIndex = left - 1;
+
+    const api = bridge();
+    if (!api || !api.delete_task) {
+      deletingIds.delete(id);
+      restoreLocalTask(snapshot);
+      toast("删除失败：接口未就绪");
+      return;
+    }
+    Promise.resolve(api.delete_task(id)).then(res => {
+      deletingIds.delete(id);
+      if (!res || res.ok === false) {
+        restoreLocalTask(snapshot);
+        toast("删除失败：" + ((res && res.error) || "未知错误"));
+      }
+    }).catch(err => {
+      deletingIds.delete(id);
+      restoreLocalTask(snapshot);
+      toast("删除失败：" + err);
+    });
+  }
+
   async function deleteSelected() {
     const item = selectedItem();
-    if (!item || !item.el.isConnected) return;
-    const t = item.t;
+    let t = (item && item.el.isConnected) ? item.t : null;
+    if (!t && selectedAllDay) t = tasks.find(x => x.id === selectedAllDay.id) || null;
+    if (!t) return;
+    const now = Date.now();
+    if (lastDelete.id === t.id && now - lastDelete.at < 500) {
+      performDelete(t);                    // 同一张卡 500ms 内第二次 Delete：跳过确认
+      return;
+    }
+    lastDelete = { id: t.id, at: now };
     const okDelete = await askConfirm({
       title: "删除任务？",
       text: "「" + t.title + "」会移入 Notion 回收站，30 天内可恢复。",
-      okText: "删除", danger: true,
+      okText: "删除", danger: true, kind: "delete", id: t.id,
     });
-    if (!okDelete) return;
-    const api = bridge();
-    if (!api) return;
-    const res = await api.delete_task(t.id);
-    if (res && res.ok) {
-      window.__hud.remove(t.id);
-      selIndex = Math.max(0, Math.min(selIndex, laneItems().length - 1));
-    } else {
-      toast("删除失败：" + ((res && res.error) || "未知错误"));
+    if (!okDelete) {
+      lastDelete = { id: null, at: 0 };    // 取消后不保留双击窗口，下一次仍先确认
+      return;
     }
+    performDelete(t);
   }
 
   window.addEventListener("keydown", e => {
+    if (e.__hudModal) return;        // 确认框已处理（同目标监听器不靠 stopPropagation）
     if (e.key === "Escape") {
       if (searchBar.classList.contains("open")) { closeSearch(); return; }
       closeDetail();
       document.querySelectorAll(".chip.sel").forEach(c => c.classList.remove("sel"));
+      clearAllDaySelection();
       selIndex = -1;
       return;
     }
@@ -4483,7 +4703,8 @@
   /* 定时刷新落地：交互中直接丢弃；否则只改有变化的节点 */
   function applyServerData(data) {
     if (!data || !Array.isArray(data.tasks)) return "none";
-    if (uiBusyNow()) return "busy";
+    /* 交互中、有创建/删除在飞：整包丢掉，等落定后下一轮再收口 */
+    if (uiBusyNow() || pendingCreateIds.size || deletingIds.size) return "busy";
 
     const incoming = data.tasks.filter(t => t && t.id);
     const inById = new Map(incoming.map(t => [t.id, t]));
@@ -4746,12 +4967,15 @@
     },
     remove(id) {
       if (detailTask && detailTask.id === id) closeDetail();
+      if (selectedAllDay && selectedAllDay.id === id) clearAllDaySelection();
       const idx = tasks.findIndex(t => t.id === id);
       if (idx >= 0) tasks.splice(idx, 1);
       document.querySelectorAll('.chip[data-id="' + id + '"]').forEach(el => el.remove());
       layoutLane("sched");
       layoutLane("due");
       updateCounts();
+      updateEmptyHint();
+      renderSummary();
       renderAllDayRows();
     },
     setStatus(id, status) {
@@ -4852,12 +5076,10 @@
       const okDelete = await askConfirm({
         title: "删除任务？",
         text: "「" + task.title + "」会移入 Notion 回收站，30 天内可恢复。",
-        okText: "删除", danger: true,
+        okText: "删除", danger: true, kind: "delete", id: task.id,
       });
       if (!okDelete) return;
-      const res = await window.pywebview.api.delete_task(task.id);
-      if (res && res.ok) window.__hud.remove(task.id);
-      else toast("删除失败：" + ((res && res.error) || "未知错误"));
+      performDelete(task);
     }
   });
 
