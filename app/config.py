@@ -25,6 +25,7 @@ DEFAULTS: dict[str, Any] = {
     "hide_on_blur": False,
     "release_memory_minutes": 15,
     "refresh_seconds": 120,
+    "sync_debounce_ms": 800,
     "autostart": False,
 }
 
@@ -134,6 +135,17 @@ def _as_refresh_seconds(value: Any) -> int:
     return int(number)
 
 
+def _as_debounce_ms(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("sync_debounce_ms 必须是 0~5000 的整数毫秒")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("sync_debounce_ms 必须是整数毫秒")
+    number = int(value)
+    if not 0 <= number <= 5000:
+        raise ValueError("sync_debounce_ms 必须在 0~5000 之间")
+    return number
+
+
 def _as_minutes(value: Any) -> int:
     # pywebview 桥可能把 15 传成 15.0，整数值的浮点也收
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -163,6 +175,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "hide_on_blur": lambda v: _as_bool(v, "hide_on_blur"),
     "release_memory_minutes": _as_minutes,
     "refresh_seconds": _as_refresh_seconds,
+    "sync_debounce_ms": _as_debounce_ms,
     "autostart": lambda v: _as_bool(v, "autostart"),
     "open_in_app": lambda v: _as_bool(v, "open_in_app"),
     "seen_intro": lambda v: _as_bool(v, "seen_intro"),

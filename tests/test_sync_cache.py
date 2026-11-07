@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
-from sync_cache import WriteCache, merge_patch  # noqa: E402
+from sync_cache import WriteCache, merge_patch, refresh_skip_reason  # noqa: E402
 
 
 def _task(sched: float = 14.0, title: str = "T") -> dict:
@@ -85,10 +85,46 @@ def test_ingest_keeps_pending_local_value() -> None:
     assert cache.get("t1")["sched"] == 15.0
 
 
+def test_succeed_keeps_local_until_next_ingest() -> None:
+    """写成功后服务端回包不同：不立刻改本地，留到下一轮刷新收口。"""
+    cache = WriteCache(delay=0.8)
+    cache.ingest([_task(14.0)])
+    cache.mutate("t1", _task(15.0), {"title": "local"}, now=500.0)
+    job = cache.begin("t1")
+    assert job is not None
+    assert cache.succeed("t1", job["gen"], _task(12.0, "server")) is True
+    assert cache.pending_ids() == []
+    assert cache.get("t1")["sched"] == 15.0          # 本地值继续生效
+    merged = cache.ingest([_task(12.0, "server")])
+    assert merged[0]["sched"] == 12.0                # 下一轮刷新才接受服务端
+    assert cache.get("t1")["sched"] == 12.0
+
+
+def test_debounce_800ms() -> None:
+    cache = WriteCache(delay=0.8)
+    cache.ingest([_task(14.0)])
+    cache.mutate("t1", _task(14.5), {"title": "a"}, now=600.0)
+    cache.mutate("t1", _task(15.0), {"title": "b"}, now=600.4)
+    assert cache.due(now=601.1) == []                # 距最后一次不足 800ms
+    assert cache.due(now=601.2) == ["t1"]            # 800ms 后合并成一次
+    job = cache.begin("t1")
+    assert job and job["patch"] == {"title": "b"}
+
+
+def test_refresh_skip_reason() -> None:
+    assert refresh_skip_reason(True, False, 99.0) == "busy"
+    assert refresh_skip_reason(False, True, 99.0) == "pending"
+    assert refresh_skip_reason(False, False, 1.99) == "idle"
+    assert refresh_skip_reason(False, False, 2.0) is None
+
+
 if __name__ == "__main__":
     test_merge_patch()
     test_coalesce_and_debounce()
     test_fail_rolls_back_last_good()
     test_newer_change_during_flight_keeps_pending()
     test_ingest_keeps_pending_local_value()
+    test_succeed_keeps_local_until_next_ingest()
+    test_debounce_800ms()
+    test_refresh_skip_reason()
     print("sync_cache tests passed")

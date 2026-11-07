@@ -1312,6 +1312,7 @@
       mOk.classList.toggle("primary", !cfg.danger);
       mOk.classList.toggle("danger", !!cfg.danger);
       modalEl.classList.add("open");
+      syncUiState(true);
       mCancel.focus();
     });
   }
@@ -1319,6 +1320,7 @@
   function closeModal(result) {
     if (!modalEl.classList.contains("open")) return;
     modalEl.classList.remove("open");
+    syncUiState(true);
     const resolve = modalResolve;
     modalResolve = null;
     if (resolve) resolve(result);
@@ -1784,6 +1786,7 @@
     let rafId = 0;
 
     dragActive = true;
+    syncUiState(true);
     if (e.pointerId !== undefined && el.setPointerCapture) {
       try { el.setPointerCapture(e.pointerId); } catch (_err) { /* 捕获失败不影响 */ }
     }
@@ -1976,6 +1979,7 @@
     document.body.classList.add("drag-lock");
     dragActive = true;
     resizing = true;
+    syncUiState(true);
     if (e.pointerId !== undefined && el.setPointerCapture) {
       try { el.setPointerCapture(e.pointerId); } catch (_err) { /* 捕获失败不影响拖拽 */ }
     }
@@ -2165,8 +2169,38 @@
   let dragActive = false;     // 拖拽中忽略缩放，否则像素位移和分钟数会换算错
   let resizing = false;       // 拖拽结束再多保持一帧，挡住 mouseup 后的误 click
 
+  /* 交互状态上报：拖拽/详情/确认框期间后台刷新让位；只报变化，不阻塞指针 */
+  let uiBusyLast = false;
+  let uiIdleSince = Date.now();
+  function uiBusyNow() {
+    return !!(dragActive || resizing ||
+      detail.classList.contains("open") || modalEl.classList.contains("open"));
+  }
+  function syncUiState(force) {
+    const busy = uiBusyNow();
+    if (busy) {
+      uiIdleSince = 0;
+    } else if (uiBusyLast) {
+      uiIdleSince = Date.now();
+    }
+    if (!force && busy === uiBusyLast) return busy;
+    uiBusyLast = busy;
+    const api = bridge();
+    if (api && api.set_ui_state) {
+      try {
+        const pending = api.set_ui_state({ busy: busy });
+        if (pending && pending.catch) pending.catch(() => { /* 桥忙时忽略 */ });
+      } catch (_err) { /* 桥未就绪不影响交互 */ }
+    }
+    return busy;
+  }
+  setInterval(syncUiState, 250);
+
   function holdResizing() {
-    requestAnimationFrame(() => requestAnimationFrame(() => { resizing = false; }));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      resizing = false;
+      syncUiState();
+    }));
   }
 
   /* 指针位置 → 该处的时刻（统一走 yToMinute，zoom / 滚动都在里面） */
@@ -2259,6 +2293,7 @@
     e.stopPropagation();   // 别冒泡出去，避免触发窗口拖动 / 空白创建
     dragActive = true;
     resizing = true;
+    syncUiState(true);
     document.body.classList.add("drag-lock");
     if (e.pointerId !== undefined && el.setPointerCapture) {
       try { el.setPointerCapture(e.pointerId); } catch (_err) { /* 捕获失败不影响拖拽 */ }
@@ -2383,9 +2418,7 @@
       if (dropAllDay) {
         /* 定时 -> 全天：日期取落点那一条全天行的日期 */
         const day = isoDateOf(dropAllDay.day);
-        el.style.opacity = ".7";
         const res = await api.set_all_day(t.id, TRACK_PROP[key], day);
-        el.style.opacity = "";
         if (res && res.ok && res.task) {
           const ui = res.task;
           ["title", "status", "tag", "dir", "subject", "sched", "due",
@@ -2405,14 +2438,12 @@
         /* 全天卡（当前没有入口）：保持旧路径 */
         const startMin = snapMinute(yToMinute(pointerY));
         const endMin = startMin + allDayDur;
-        el.style.opacity = ".7";
         Promise.resolve(api.resize_task(
           t.id, TRACK_PROP[key], pointOfMinute(startMin), pointOfMinute(endMin)
         )).then(res => {
-          el.style.opacity = "";
           if (res && res.ok) refreshChips(t);
           else { restore(); toast("改期失败：" + ((res && res.error) || "未知错误")); }
-        }).catch(err => { el.style.opacity = ""; restore(); toast("改期失败：" + err); });
+        }).catch(err => { restore(); toast("改期失败：" + err); });
         return;
       }
 
@@ -2761,20 +2792,13 @@
     centerOnNow();
   });
 
-  /* 刷新数据（按钮 / 托盘共用）：保持当前视口中线时刻 */
+  /* 刷新数据（按钮 / 托盘共用）：最小 diff 落地，不重置滚动/缩放/选中 */
   async function refreshData() {
     const api = bridge();
     if (!api || !api.reload_data) { scrollToNow(true); return null; }
-    const centerTs = tsAtPoint(scroll.getBoundingClientRect().top + scroll.clientHeight / 2);
     const res = await api.reload_data();
     if (res && res.data) {
-      tasks.length = 0;
-      tasks.push(...(res.data.tasks || []));
-      undated.length = 0;
-      undated.push(...(res.data.undated || []));
-      if (res.data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, res.data);
-      renderTimeline();
-      scroll.scrollTop = centeredScrollTop(centerTs);
+      applyServerData(res.data);
       if (res.error) console.warn("刷新回落：", res.error);
     }
     return res;
@@ -3473,6 +3497,7 @@
     let resized = false;
 
     dragActive = true;                 // 禁整卡拖拽 + Ctrl+滚轮缩放 + 空白拖拽
+    syncUiState(true);
     if (e.pointerId !== undefined && scroll.setPointerCapture) {
       try { scroll.setPointerCapture(e.pointerId); } catch (_err) { /* 忽略 */ }
     }
@@ -4233,6 +4258,7 @@
 
   function placeDetail(el) {
     detail.classList.add("open");            // 先显示才能量尺寸
+    syncUiState(true);
     const r = el.getBoundingClientRect();
     const w = detail.offsetWidth;
     const h = detail.offsetHeight;
@@ -4274,6 +4300,7 @@
 
   function closeDetail() {
     detail.classList.remove("open");
+    syncUiState(true);
     clearTimeout(detailTimer);
     detailTimer = null;
     detailTask = null;
@@ -4301,7 +4328,7 @@
   }
 
   /* 更新该任务的所有卡片（两条轨道都可能挂），必要时补挂或移除 */
-  function refreshChips(t) {
+  function refreshChips(t, opts) {
     ["sched", "due"].forEach(key => {
       const hasValue = typeof t[key] === "number";
       const isAllDay = hasValue && !!t[ALL_DAY_KEY[key]];
@@ -4331,7 +4358,7 @@
       }
       layoutLane(key);
     });
-    renderAllDayRows();
+    if (!opts || opts.allDay !== false) renderAllDayRows();
   }
 
   /* 用后端回传的 task 覆盖本地同 id 项（含 end/end_time 派生字段） */
@@ -4356,6 +4383,152 @@
     updateEmptyHint();
     renderSummary();          // 今天 / 逾期计数也跟着日期走
     scroll.scrollTop = st;
+  }
+
+  /* ---------- 后台刷新：最小 diff ---------- */
+  const TASK_FIELDS = ["title", "status", "tag", "dir", "subject",
+    "sched", "due", "endSched", "endDue", "allDaySched", "allDayDue"];
+
+  function sameField(a, b) {
+    const av = (a === undefined || a === null) ? null : a;
+    const bv = (b === undefined || b === null) ? null : b;
+    return av === bv;
+  }
+
+  function taskFieldDiff(a, b) {
+    return TASK_FIELDS.some(k => !sameField(a[k], b[k]));
+  }
+
+  function adoptTaskFields(dst, src) {
+    TASK_FIELDS.forEach(k => {
+      if (k in src && src[k] !== null && src[k] !== undefined) dst[k] = src[k];
+      else delete dst[k];
+    });
+  }
+
+  function allDayTouched(a, b) {
+    return !sameField(a.allDaySched, b.allDaySched) ||
+      !sameField(a.allDayDue, b.allDayDue) ||
+      (typeof a.sched === "number") !== (typeof b.sched === "number") ||
+      (typeof a.due === "number") !== (typeof b.due === "number") ||
+      (!!a.allDaySched && !sameField(a.sched, b.sched)) ||
+      (!!a.allDayDue && !sameField(a.due, b.due));
+  }
+
+  /* 只改文字/状态，不动位置；全天行里的同一项也顺手改，不重建 */
+  function patchChipMeta(t) {
+    const id = CSS.escape(t.id);
+    document.querySelectorAll('.chip[data-id="' + id + '"]').forEach(el => {
+      el.dataset.status = t.status || "";
+      el.classList.toggle("done", t.status === "done");
+      const dot = el.querySelector(".dot");
+      if (dot) dot.className = "dot " + (t.status || "");
+      const nameEl = el.querySelector(".t");
+      if (nameEl) nameEl.textContent = t.title;
+      const row2 = el.querySelector(".row2");
+      if (row2) {
+        let tagEl = row2.querySelector(".tag");
+        if (t.tag) {
+          if (!tagEl) {
+            tagEl = document.createElement("span");
+            tagEl.className = "tag";
+            row2.insertBefore(tagEl, row2.querySelector(".late"));
+          }
+          tagEl.textContent = t.tag;
+        } else if (tagEl) {
+          tagEl.remove();
+        }
+      }
+      const lane = el.closest(".lane");
+      if (lane && lane.dataset.track === "due") {
+        const late = t.status !== "done" && typeof t.due === "number" &&
+          base + t.due * H < nowTs;
+        el.classList.toggle("overdue", late);
+      }
+    });
+    document.querySelectorAll('.allitem[data-id="' + id + '"]').forEach(el => {
+      el.classList.toggle("done", t.status === "done");
+      el.title = t.title || "";
+      const dot = el.querySelector(".dot");
+      if (dot) dot.className = "dot " + (t.status || "");
+      const nm = el.querySelector(".nm");
+      if (nm) nm.textContent = t.title || "(无标题)";
+    });
+  }
+
+  function undatedSig(list) {
+    return (list || []).map(u => [u.title, u.status, u.tag].join("\u0001")).join("\u0002");
+  }
+
+  /* 结构变了（增删任务）才整体重建；仍保住滚动位置、缩放、轨道与选中卡 */
+  function applyFullData(data) {
+    const st = scroll.scrollTop;
+    const track = document.getElementById("timeline").dataset.track;
+    const selected = document.querySelector(".chip.sel");
+    const selId = selected ? selected.dataset.id : null;
+    tasks.length = 0;
+    tasks.push(...data.tasks);
+    undated.length = 0;
+    undated.push(...(data.undated || []));
+    if (data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, data);
+    renderTimeline();
+    setTrack(track);
+    scroll.scrollTop = st;
+    if (selId) {
+      const el = document.querySelector('.chip[data-id="' + CSS.escape(selId) + '"]');
+      if (el) el.classList.add("sel");
+    }
+  }
+
+  /* 定时刷新落地：交互中直接丢弃；否则只改有变化的节点 */
+  function applyServerData(data) {
+    if (!data || !Array.isArray(data.tasks)) return "none";
+    if (uiBusyNow()) return "busy";
+
+    const incoming = data.tasks.filter(t => t && t.id);
+    const inById = new Map(incoming.map(t => [t.id, t]));
+    const curById = new Map(tasks.map(t => [t.id, t]));
+    const structural = incoming.some(t => !curById.has(t.id)) ||
+      tasks.some(t => !inById.has(t.id));
+    if (structural) {
+      applyFullData(data);
+      return "full";
+    }
+
+    const st = scroll.scrollTop;
+    let changed = 0;
+    let allDayDirty = false;
+    incoming.forEach(src => {
+      const dst = curById.get(src.id);
+      if (!dst || !taskFieldDiff(dst, src)) return;
+      const timeChanged = ["sched", "due", "endSched", "endDue"]
+        .some(k => !sameField(dst[k], src[k]));
+      const tagChanged = !sameField(dst.tag, src.tag);
+      if (allDayTouched(dst, src)) allDayDirty = true;
+      adoptTaskFields(dst, src);
+      if (timeChanged) {
+        refreshChips(dst, { allDay: false });
+        if (tagChanged) patchChipMeta(dst);       // refreshChips 不重画标签
+      } else {
+        patchChipMeta(dst);
+      }
+      changed += 1;
+    });
+    if (allDayDirty) renderAllDayRows();
+
+    const undatedChanged = undatedSig(undated) !== undatedSig(data.undated || []);
+    if (undatedChanged) {
+      undated.length = 0;
+      undated.push(...(data.undated || []));
+      renderDrawer();
+    }
+    if (changed) {
+      updateCounts();
+      renderSummary();
+    }
+    if (data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, data);
+    scroll.scrollTop = st;
+    return (changed || undatedChanged) ? "diff" : "none";
   }
 
   function applyDetailResult(uiTask) {
@@ -4603,21 +4776,18 @@
       return true;
     },
 
-    /* 后台刷新推过来的整包数据：保持视口中心时刻与当前轨道 */
+    /* 后台刷新推过来的整包数据：最小 diff，交互中返回 busy 并整包丢弃 */
     setData(data) {
-      if (!data || !Array.isArray(data.tasks)) return false;
-      const track = document.getElementById("timeline").dataset.track;
-      const rect = scroll.getBoundingClientRect();
-      const centerTs = tsAtPoint(rect.top + scroll.clientHeight / 2);
-      tasks.length = 0;
-      tasks.push(...data.tasks);
-      undated.length = 0;
-      undated.push(...(data.undated || []));
-      if (data.options) window.__DATA__ = Object.assign({}, window.__DATA__ || {}, data);
-      renderTimeline();
-      setTrack(track);
-      scroll.scrollTop = centeredScrollTop(centerTs);
-      return true;
+      return applyServerData(data);
+    },
+
+    /* E2E/调试：当前交互状态与空闲时长 */
+    refreshGate() {
+      const busy = uiBusyNow();
+      return {
+        busy: busy,
+        idleMs: busy || !uiIdleSince ? 0 : Date.now() - uiIdleSince
+      };
     },
 
     /* 托盘「刷新数据」：不等结果，托盘菜单不该被网络拖住 */

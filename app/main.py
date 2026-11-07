@@ -40,7 +40,7 @@ import config as app_config  # noqa: E402
 import tray as app_tray  # noqa: E402
 from data import DATA_SOURCE_ID, TRACK_DUE, TRACK_SCHED, load, to_ui  # noqa: E402
 from quickadd import parse as parse_quick_add  # noqa: E402
-from sync_cache import WriteCache  # noqa: E402
+from sync_cache import WriteCache, refresh_skip_reason  # noqa: E402
 from notion_timeline.api_client import NotionClient  # noqa: E402
 from notion_timeline.cache_reader import read_tasks  # noqa: E402
 from notion_timeline.dates import shift  # noqa: E402
@@ -248,33 +248,64 @@ def data_digest(data: dict) -> str:
 
 
 def refresh_loop(window: webview.Window, initial_digest: str) -> None:
-    """每 refresh_seconds 秒静默拉一次；没变化不动界面，失败只记日志。"""
+    """每 refresh_seconds 秒静默拉一次；交互中/有 pending 写就让位，空闲后再补一次。"""
     last = initial_digest
+
+    def wait_until_idle() -> None:
+        reason = _refresh_skip_reason()
+        if not reason:
+            return
+        print(f"后台刷新：跳过（{reason}）", flush=True)
+        while reason:
+            time.sleep(_REFRESH_RETRY_SECONDS)
+            reason = _refresh_skip_reason()
+
+    def fetch_when_idle() -> tuple[dict, str, str | None] | None:
+        while True:
+            wait_until_idle()
+            try:
+                data, source, error = _load_merged()
+            except Exception as exc:  # noqa: BLE001
+                print("后台刷新失败:", exc, flush=True)
+                return None
+            # 拉取期间用户又开始拖拽/有新 pending：丢掉这次结果，等再次空闲后重拉
+            if _refresh_skip_reason():
+                print("后台刷新：数据拉取期间又有交互，丢弃本轮", flush=True)
+                continue
+            return data, source, error
+
     while True:
         seconds = int(state["config"].get("refresh_seconds", 120) or 0)
         time.sleep(max(5, seconds) if seconds > 0 else 30)
         if seconds <= 0:
             continue
-        try:
-            data, source, error = _load_merged()
-        except Exception as exc:  # noqa: BLE001
-            print("后台刷新失败:", exc, flush=True)
+        fetched = fetch_when_idle()
+        if fetched is None:
             continue
+        data, source, error = fetched
         digest = data_digest(data)
         if digest == last:
             print(f"后台刷新：无变化（source={source}）", flush=True)
             continue
-        last = digest
         payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
         status = json.dumps({"source": source, "error": (error or "")[:200]}, ensure_ascii=False)
         try:
-            window.evaluate_js(
-                f"window.__hud && window.__hud.setData({payload});"
-                f"window.__hud && window.__hud.setStatus({status});"
+            result = window.evaluate_js(
+                f"window.__hud ? window.__hud.setData({payload}) : 'none';"
             )
-            print(f"后台刷新：已重渲染（source={source}）", flush=True)
         except Exception as exc:  # noqa: BLE001
             print("后台刷新推送失败:", exc, flush=True)
+            continue
+        if result in ("busy", None):
+            # 拉取到推送之间用户开始了交互：这轮不落地，下一轮重新拉
+            print("后台刷新：交互中，本轮丢弃", flush=True)
+            continue
+        try:
+            window.evaluate_js(f"window.__hud && window.__hud.setStatus({status});")
+        except Exception as exc:  # noqa: BLE001
+            print("后台刷新状态推送失败:", exc, flush=True)
+        last = digest
+        print(f"后台刷新：{result}（source={source}）", flush=True)
 
 
 # ---------------------------------------------------------------- 卡片改时长
@@ -1030,10 +1061,29 @@ def _read_current_date(client: NotionClient, task_id: str, prop: str) -> DateVal
 
 
 # ---------------------------------------------------------------- 乐观写入
-_CACHE = WriteCache(delay=0.5)
+def _debounce_delay() -> float:
+    return max(0.0, float(state["config"].get("sync_debounce_ms", 800)) / 1000.0)
+
+
+_CACHE = WriteCache(delay=_debounce_delay())
 _API_REF: Any = None
 _writer_lock = threading.Lock()
 _writer_started = False
+
+# 前端主动上报的交互状态；刷新线程只读
+_UI_STATE: dict[str, Any] = {"busy": False, "idle_since": time.time()}
+_REFRESH_IDLE_SECONDS = 2.0
+_REFRESH_RETRY_SECONDS = 0.5
+
+
+def _refresh_skip_reason() -> str | None:
+    idle = 0.0 if _UI_STATE["busy"] else time.time() - float(_UI_STATE["idle_since"])
+    return refresh_skip_reason(
+        busy=bool(_UI_STATE["busy"]),
+        pending=bool(_CACHE.pending_ids()),
+        idle_seconds=idle,
+        idle_required=_REFRESH_IDLE_SECONDS,
+    )
 
 _STATUS_UI = {
     "未开始": "todo", "进行中": "doing", "已完成": "done",
@@ -1276,6 +1326,17 @@ class Api:
     def get_config(self) -> dict:
         return dict(state["config"])
 
+    def set_ui_state(self, info: dict | None = None) -> dict:
+        """前端上报拖拽/弹窗状态；后台刷新据此让位，不反向改界面。"""
+        busy = bool((info or {}).get("busy"))
+        was_busy = bool(_UI_STATE["busy"])
+        _UI_STATE["busy"] = busy
+        if busy:
+            _UI_STATE["idle_since"] = 0.0
+        elif was_busy:
+            _UI_STATE["idle_since"] = time.time()
+        return {"ok": True, "busy": busy}
+
     def set_config(self, changes: dict | None = None) -> dict:
         """落盘 + 即时应用。样式类失败不回滚（可重试），热键注册失败回滚。"""
         if not isinstance(changes, dict):
@@ -1304,6 +1365,8 @@ class Api:
             return {"ok": False, "error": str(exc), "config": previous}
 
         state["config"] = updated
+        if "sync_debounce_ms" in changes:
+            _CACHE.delay = updated["sync_debounce_ms"] / 1000.0
         if "dock_side" in changes and state["hwnd"]:
             try:
                 box = fit_to_monitor(

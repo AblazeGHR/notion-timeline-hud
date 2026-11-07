@@ -25,6 +25,19 @@ def merge_patch(base: dict | None, extra: dict | None) -> dict:
     return out
 
 
+def refresh_skip_reason(
+    busy: bool, pending: bool, idle_seconds: float, idle_required: float = 2.0
+) -> str | None:
+    """定时刷新是否让位：交互中 / 有 pending 写 / 刚空闲不足 2s。"""
+    if busy:
+        return "busy"
+    if pending:
+        return "pending"
+    if idle_seconds < idle_required:
+        return "idle"
+    return None
+
+
 @dataclass
 class PendingWrite:
     patch: dict
@@ -109,8 +122,8 @@ class WriteCache:
             pending = self._pending.get(task_id)
             if pending and pending.gen == gen:
                 self._pending.pop(task_id, None)
-                if server_task:
-                    self._tasks[task_id] = copy.deepcopy(server_task)
+                # 本地镜像继续用乐观值：即使服务端回包不同，也不当场改 UI，
+                # 差异留到下一轮空闲刷新（ingest）再收口。
                 return True
             return False
 

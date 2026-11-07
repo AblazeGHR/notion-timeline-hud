@@ -134,6 +134,20 @@ def test_font_scale() -> None:
     assert config.load(path)["font_scale"] == 1.23
 
 
+def test_sync_debounce() -> None:
+    path = _tmpdir() / "config.json"
+    assert config.load(path)["sync_debounce_ms"] == 800, "默认 800ms"
+    for good, want in ((0, 0), (800, 800), (5000, 5000), (1200.0, 1200)):
+        assert config.patch({"sync_debounce_ms": good}, path)["sync_debounce_ms"] == want
+    for bad in (-1, 5001, 1.5, True, "800", None):
+        try:
+            config.patch({"sync_debounce_ms": bad}, path)
+        except ValueError:
+            continue
+        raise AssertionError(f"应该拒绝 {bad!r}")
+    assert config.load(path)["sync_debounce_ms"] == 1200
+
+
 def test_dock_side() -> None:
     path = _tmpdir() / "config.json"
     assert config.load(path)["dock_side"] == "right", "默认靠右"

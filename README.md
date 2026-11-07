@@ -67,8 +67,9 @@ Notion token 放在环境变量 `NOTION_TOKEN` 或仓库根 `.env`（`.env` 已�
 下次唤出贴对应边（多屏仍按鼠标所在屏）。
 
 配置落在 `app/config.json`（gitignore），字段：`hotkey / opacity / timeline_scale /
-font_scale / hide_on_blur / release_memory_minutes / refresh_seconds / open_in_app /
-dock_side / seen_intro / autostart`。
+font_scale / hide_on_blur / release_memory_minutes / refresh_seconds / sync_debounce_ms /
+open_in_app / dock_side / seen_intro / autostart`。`sync_debounce_ms` 默认 800，控制
+用户改完后多久合并写回 Notion。
 
 ## 目录
 
